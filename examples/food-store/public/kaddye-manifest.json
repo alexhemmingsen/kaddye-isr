@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "routes": [
+    {
+      "pattern": "/product/:id",
+      "paramNames": [
+        "id"
+      ],
+      "regex": "^/product/([^/]+)$"
+    }
+  ]
+}

@@ -1,15 +1,13 @@
 {
   "name": "kaddye-framework",
   "private": true,
-  "version": "0.0.0",
-  "description": "ISR as a service for React apps on S3/CloudFront",
   "scripts": {
-    "build": "pnpm --filter kaddye build",
-    "dev": "pnpm --filter kaddye dev",
+    "build": "pnpm -r build",
+    "dev": "pnpm -r dev",
     "typecheck": "pnpm -r typecheck"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=9.0.0"
+    "node": ">=20",
+    "pnpm": ">=9"
   }
 }

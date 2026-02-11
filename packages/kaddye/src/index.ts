@@ -1,10 +1,12 @@
 export type {
-  PageProps,
-  HeadFunction,
-  KaddyeConfig,
   KaddyeRoute,
-  RouteParams,
-  AwsConfig,
-} from './core/types';
+  KaddyePluginConfig,
+  KaddyeProvider,
+  ProviderResources,
+  KaddyeManifest,
+  ManifestRoute,
+  RouteMatch,
+} from './types.js';
 
-export { defineConfig } from './core/config';
+export { validateConfig } from './config.js';
+export { extractParamNames, patternToRegex, matchRoute, buildManifest } from './routes.js';
