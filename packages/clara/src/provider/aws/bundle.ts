@@ -10,7 +10,7 @@
  */
 
 import { build } from 'esbuild';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import archiver from 'archiver';
@@ -27,6 +27,27 @@ function getModuleDir(): string {
     return __dirname;
   }
   return dirname(fileURLToPath(import.meta.url));
+}
+
+/**
+ * Resolve a Lambda entry point file.
+ *
+ * When running from dist/, source .ts files are at ../src/provider/aws/.
+ * When running from src/provider/aws/ directly (vitest), they're in the same dir.
+ */
+function resolveEntry(name: string): string {
+  const moduleDir = getModuleDir();
+
+  // Same directory (running from source)
+  const sameDirTs = resolve(moduleDir, `${name}.ts`);
+  if (existsSync(sameDirTs)) return sameDirTs;
+
+  // Running from dist/ — resolve to src/provider/aws/
+  const srcTs = resolve(moduleDir, '..', 'src', 'provider', 'aws', `${name}.ts`);
+  if (existsSync(srcTs)) return srcTs;
+
+  // Fallback: .js in same directory
+  return resolve(moduleDir, `${name}.js`);
 }
 
 /**
@@ -72,10 +93,9 @@ export async function bundleEdgeHandler(
 ): Promise<Buffer> {
   mkdirSync(BUNDLE_DIR, { recursive: true });
   const outfile = join(BUNDLE_DIR, 'edge-handler.js');
-  const moduleDir = getModuleDir();
 
   await build({
-    entryPoints: [resolve(moduleDir, 'edge-handler.ts')],
+    entryPoints: [resolveEntry('edge-handler')],
     bundle: true,
     platform: 'node',
     target: 'node20',
@@ -104,10 +124,9 @@ export async function bundleEdgeHandler(
 export async function bundleRenderer(): Promise<Buffer> {
   mkdirSync(BUNDLE_DIR, { recursive: true });
   const outfile = join(BUNDLE_DIR, 'renderer.js');
-  const moduleDir = getModuleDir();
 
   await build({
-    entryPoints: [resolve(moduleDir, 'renderer.ts')],
+    entryPoints: [resolveEntry('renderer')],
     bundle: true,
     platform: 'node',
     target: 'node20',
