@@ -212,8 +212,13 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
                 Statement: [
                   {
                     Effect: 'Allow',
-                    Action: ['s3:PutObject'],
+                    Action: ['s3:PutObject', 's3:GetObject'],
                     Resource: { 'Fn::Sub': '${ContentBucket.Arn}/*' },
+                  },
+                  {
+                    Effect: 'Allow',
+                    Action: ['s3:ListBucket'],
+                    Resource: { 'Fn::GetAtt': ['ContentBucket', 'Arn'] },
                   },
                 ],
               },
