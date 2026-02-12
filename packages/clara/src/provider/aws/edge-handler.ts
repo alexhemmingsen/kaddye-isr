@@ -142,12 +142,12 @@ async function getIndexHtml(): Promise<string | null> {
 
 const lambda = new LambdaClient({ region: __CLARA_REGION__ });
 
-async function invokeRenderer(uri: string): Promise<void> {
+async function invokeRenderer(uri: string): Promise<string | null> {
   try {
-    await lambda.send(
+    const result = await lambda.send(
       new InvokeCommand({
         FunctionName: __CLARA_RENDERER_ARN__,
-        InvocationType: 'Event', // async, fire-and-forget
+        InvocationType: 'RequestResponse', // synchronous — wait for rendered HTML
         Payload: JSON.stringify({
           uri,
           bucket: __CLARA_BUCKET_NAME__,
@@ -155,8 +155,21 @@ async function invokeRenderer(uri: string): Promise<void> {
         }),
       })
     );
+
+    if (result.Payload) {
+      const payload = JSON.parse(
+        typeof result.Payload === 'string'
+          ? result.Payload
+          : new TextDecoder().decode(result.Payload)
+      );
+      if (payload.statusCode === 200) {
+        const body = JSON.parse(payload.body);
+        return body.html || null;
+      }
+    }
+    return null;
   } catch {
-    // Fire-and-forget — don't let renderer invocation failure affect the response
+    return null;
   }
 }
 
@@ -226,16 +239,16 @@ export async function handler(
   const manifest = await getManifest();
   const match = manifest ? matchRoute(uri, manifest.routes) : null;
 
-  // 4. Get index.html — we serve it whether or not the route matches
-  //    (SPA fallback for all missing files)
-  const html = await getIndexHtml();
-  if (!html) return response; // Can't help — return original error
-
-  // 5. If route matches: also trigger the renderer in the background
+  // 4. If route matches: invoke the renderer synchronously and serve the result
   if (match) {
-    await invokeRenderer(uri);
+    const renderedHtml = await invokeRenderer(uri);
+    if (renderedHtml) {
+      return buildHtmlResponse(renderedHtml, response);
+    }
   }
 
-  // 6. Serve the SPA shell
+  // 5. Fallback: serve index.html as SPA shell
+  const html = await getIndexHtml();
+  if (!html) return response; // Can't help — return original error
   return buildHtmlResponse(html, response);
 }

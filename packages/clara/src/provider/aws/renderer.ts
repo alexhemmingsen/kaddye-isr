@@ -15,7 +15,12 @@
 
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+} from '@aws-sdk/client-s3';
 
 interface RendererEvent {
   /** The request URI, e.g. '/product/42' */
@@ -42,6 +47,86 @@ function deriveS3Key(uri: string): string {
   return `${cleanUri}.html`;
 }
 
+/**
+ * Find an existing HTML file in the same route directory to use as a shell template.
+ * For /product/5 → look for any existing product/*.html in S3.
+ */
+async function findShellTemplate(
+  s3: S3Client,
+  bucket: string,
+  uri: string
+): Promise<string | null> {
+  // Get the route prefix: /product/5 → product/
+  const cleanUri = uri.replace(/^\//, '').replace(/\/$/, '');
+  const parts = cleanUri.split('/');
+  if (parts.length < 2) return null;
+
+  const prefix = parts.slice(0, -1).join('/') + '/';
+
+  try {
+    const list = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        MaxKeys: 10,
+      })
+    );
+
+    // Find the first .html file
+    const htmlFile = list.Contents?.find((obj) => obj.Key?.endsWith('.html'));
+    if (!htmlFile?.Key) return null;
+
+    const response = await s3.send(
+      new GetObjectCommand({ Bucket: bucket, Key: htmlFile.Key })
+    );
+    return (await response.Body?.transformToString('utf-8')) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Patch the RSC flight data in a product page HTML to render a different product.
+ * Replaces the `id` prop and sets `initial` to null so the client component
+ * fetches the product from Supabase at runtime.
+ */
+function patchShellForNewId(html: string, targetId: string): string {
+  // The RSC flight data contains a line like:
+  // 4:["$","$Lf",null,{"id":"1","initial":{"id":"1","name":"...","description":"...","price":...}}]
+  // We need to change "id" to the target and set "initial" to null.
+  //
+  // Also patch the route segment: "children":["product",... ["id","1","d"]
+  // to use the target ID.
+
+  let patched = html;
+
+  // Patch the ProductDetail props: {"id":"X","initial":{...}} → {"id":"TARGET","initial":null}
+  patched = patched.replace(
+    /\{"id":"[^"]+","initial":\{[^}]*\}\}/g,
+    `{"id":"${targetId}","initial":null}`
+  );
+
+  // Patch the route segment: ["id","X","d"] → ["id","TARGET","d"]
+  patched = patched.replace(
+    /\["id","[^"]+","d"\]/g,
+    `["id","${targetId}","d"]`
+  );
+
+  // Patch the URL segments in the flight data: "c":["","product","X"] → "c":["","product","TARGET"]
+  patched = patched.replace(
+    /("c":\["","product",)"[^"]+"\]/g,
+    `$1"${targetId}"]`
+  );
+
+  // Patch metadata title (optional, will be overwritten after render)
+  patched = patched.replace(
+    /\{"children":"[^"]*\s*\|\s*Food Store"\}/g,
+    `{"children":"Product ${targetId} | Food Store"}`
+  );
+
+  return patched;
+}
+
 export async function handler(event: RendererEvent): Promise<RendererResult> {
   const { uri, bucket, distributionDomain } = event;
   const region = process.env.AWS_REGION || 'us-east-1';
@@ -53,10 +138,14 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
     };
   }
 
+  const s3 = new S3Client({ region });
   let browser;
 
   try {
-    // 1. Launch headless Chrome
+    // 1. Find an existing page in the same route directory to use as a template
+    const shellHtml = await findShellTemplate(s3, bucket, uri);
+
+    // 2. Launch headless Chrome
     browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
@@ -66,22 +155,46 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
 
     const page = await browser.newPage();
 
-    // 2. Navigate to the page via CloudFront with bypass param
-    //    The bypass param tells the edge handler to serve index.html
-    //    without triggering another render (prevents infinite loop)
-    const url = `https://${distributionDomain}${uri}?__clara_bypass=1`;
+    let url: string;
+
+    if (shellHtml) {
+      // 3a. Use request interception to serve the patched shell template
+      //     Extract the target ID from the URI (last path segment)
+      const targetId = uri.replace(/^\//, '').replace(/\/$/, '').split('/').pop() || '';
+      const patchedHtml = patchShellForNewId(shellHtml, targetId);
+
+      await page.setRequestInterception(true);
+
+      let documentIntercepted = false;
+      page.on('request', (request) => {
+        if (request.resourceType() === 'document' && !documentIntercepted) {
+          documentIntercepted = true;
+          request.respond({
+            status: 200,
+            contentType: 'text/html; charset=utf-8',
+            body: patchedHtml,
+          });
+        } else {
+          request.continue();
+        }
+      });
+
+      url = `https://${distributionDomain}${uri}`;
+    } else {
+      // 3b. Fallback: load via CloudFront bypass (serves index.html)
+      url = `https://${distributionDomain}${uri}?__clara_bypass=1`;
+    }
 
     await page.goto(url, {
-      waitUntil: 'networkidle0', // No network requests for 500ms
+      waitUntil: 'networkidle0',
       timeout: 30000,
     });
 
-    // 3. Capture the fully rendered HTML
+    // 4. Capture the fully rendered HTML
     const html = await page.content();
 
-    // 4. Upload to S3
+    // 5. Upload to S3
     const s3Key = deriveS3Key(uri);
-    const s3 = new S3Client({ region });
 
     await s3.send(
       new PutObjectCommand({
@@ -98,6 +211,7 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
       body: JSON.stringify({
         message: `Rendered and cached: ${uri}`,
         key: s3Key,
+        html,
       }),
     };
   } catch (err) {
