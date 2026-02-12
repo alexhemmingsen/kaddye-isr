@@ -77,23 +77,10 @@ async function deploy() {
     provider,
   };
 
-  // Check for existing infrastructure
-  let resources = loadResources();
-
-  if (resources) {
-    console.log(`[clara] Found existing ${provider.name} infrastructure`);
-  } else {
-    console.log(`[clara] Checking for existing ${provider.name} infrastructure...`);
-    resources = await provider.exists(pluginConfig);
-  }
-
-  // Provision if needed
-  if (!resources) {
-    console.log(`[clara] No infrastructure found. Provisioning with ${provider.name}...`);
-    resources = await provider.setup(pluginConfig);
-    saveResources(resources);
-    console.log('[clara] Infrastructure provisioned and saved to .clara/resources.json');
-  }
+  // Always run setup — it handles both creating new stacks and updating existing ones
+  console.log(`[clara] Setting up ${provider.name} infrastructure...`);
+  const resources = await provider.setup(pluginConfig);
+  saveResources(resources);
 
   // Deploy
   console.log(`[clara] Deploying to ${provider.name}...`);
