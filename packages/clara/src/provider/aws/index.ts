@@ -214,7 +214,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
   const region = 'us-east-1';
   const byoi = isByoi(awsConfig);
 
-  const stackName = byoi ? '' : (awsConfig.stackName || STACK_NAME_PREFIX);
+  const stackName = byoi ? '' : awsConfig.stackName || STACK_NAME_PREFIX;
 
   return {
     name: 'aws',
@@ -275,6 +275,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         const events = await cfn.send(
           new DescribeStackEventsCommand({ StackName: stackName })
         );
+
         const failures = (events.StackEvents || [])
           .filter((e) => e.ResourceStatus?.includes('FAILED'))
           .map((e) => `  ${e.LogicalResourceId}: ${e.ResourceStatusReason}`)
