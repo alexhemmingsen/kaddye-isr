@@ -2,6 +2,7 @@ import {
   CloudFormationClient,
   CreateStackCommand,
   DescribeStacksCommand,
+  DescribeStackEventsCommand,
   DeleteStackCommand,
   waitUntilStackCreateComplete,
   waitUntilStackDeleteComplete,
@@ -208,10 +209,29 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         return byoiResources(awsConfig as AwsConfig & { bucketName: string });
       }
 
-      console.log(`[clara/aws] Creating CloudFormation stack: ${stackName}`);
-
       const template = buildTemplate({ stackName, region, bucketName });
       const cfn = new CloudFormationClient({ region });
+
+      // Check for a failed stack from a previous attempt and clean it up
+      try {
+        const existing = await cfn.send(
+          new DescribeStacksCommand({ StackName: stackName })
+        );
+        const status = existing.Stacks?.[0]?.StackStatus;
+        if (status === 'ROLLBACK_COMPLETE' || status === 'DELETE_FAILED') {
+          console.log(`[clara/aws] Found failed stack (${status}). Deleting before retry...`);
+          await cfn.send(new DeleteStackCommand({ StackName: stackName }));
+          await waitUntilStackDeleteComplete(
+            { client: cfn, maxWaitTime: 300 },
+            { StackName: stackName }
+          );
+          console.log('[clara/aws] Old stack deleted');
+        }
+      } catch {
+        // Stack doesn't exist — that's fine
+      }
+
+      console.log(`[clara/aws] Creating CloudFormation stack: ${stackName}`);
 
       await cfn.send(
         new CreateStackCommand({
@@ -225,10 +245,27 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         '[clara/aws] Waiting for stack creation (this may take a few minutes)...'
       );
 
-      await waitUntilStackCreateComplete(
-        { client: cfn, maxWaitTime: 600 },
-        { StackName: stackName }
-      );
+      try {
+        await waitUntilStackCreateComplete(
+          { client: cfn, maxWaitTime: 600 },
+          { StackName: stackName }
+        );
+      } catch {
+        // Stack creation failed — fetch the events to show what went wrong
+        const events = await cfn.send(
+          new DescribeStackEventsCommand({ StackName: stackName })
+        );
+        const failures = (events.StackEvents || [])
+          .filter((e) => e.ResourceStatus?.includes('FAILED'))
+          .map((e) => `  ${e.LogicalResourceId}: ${e.ResourceStatusReason}`)
+          .slice(0, 5);
+
+        if (failures.length) {
+          console.error('[clara/aws] Stack creation failed:');
+          failures.forEach((f) => console.error(f));
+        }
+        throw new Error('CloudFormation stack creation failed');
+      }
 
       console.log('[clara/aws] Stack created successfully');
 
