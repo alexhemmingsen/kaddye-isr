@@ -5,20 +5,24 @@ import {
   DescribeStackEventsCommand,
   DeleteStackCommand,
   waitUntilStackCreateComplete,
-  waitUntilStackDeleteComplete,
+  waitUntilStackDeleteComplete
 } from '@aws-sdk/client-cloudformation';
 import {
   LambdaClient,
   UpdateFunctionCodeCommand,
-  PublishVersionCommand,
+  PublishVersionCommand
 } from '@aws-sdk/client-lambda';
 import {
   CloudFrontClient,
   GetDistributionConfigCommand,
   UpdateDistributionCommand,
-  CreateInvalidationCommand,
+  CreateInvalidationCommand
 } from '@aws-sdk/client-cloudfront';
-import type { ClaraProvider, ClaraPluginConfig, ProviderResources } from '../../types.js';
+import type {
+  ClaraProvider,
+  ClaraPluginConfig,
+  ProviderResources
+} from '../../types.js';
 import { createS3Client, syncToS3, emptyBucket } from './s3.js';
 import { buildTemplate } from './cloudformation.js';
 import { bundleEdgeHandler, bundleRenderer } from './bundle.js';
@@ -61,7 +65,9 @@ async function getStackOutputs(
 
   const stack = result.Stacks?.[0];
   if (!stack || !stack.Outputs) {
-    throw new Error(`[clara/aws] Stack ${stackName} not found or has no outputs`);
+    throw new Error(
+      `[clara/aws] Stack ${stackName} not found or has no outputs`
+    );
   }
 
   const outputs: Record<string, string> = {};
@@ -90,7 +96,7 @@ function outputsToResources(
     distributionId: outputs.DistributionId,
     distributionDomain: outputs.DistributionDomain,
     edgeFunctionArn: outputs.EdgeFunctionArn,
-    rendererFunctionArn: outputs.RendererFunctionArn,
+    rendererFunctionArn: outputs.RendererFunctionArn
   };
 }
 
@@ -131,7 +137,7 @@ async function updateCloudFrontEdgeVersion(
     new UpdateDistributionCommand({
       Id: distributionId,
       DistributionConfig: config,
-      IfMatch: etag,
+      IfMatch: etag
     })
   );
 }
@@ -139,8 +145,19 @@ async function updateCloudFrontEdgeVersion(
 /**
  * Check if all BYOI (bring your own infrastructure) fields are present.
  */
-function isByoi(config: AwsConfig): config is AwsConfig &
-  Required<Pick<AwsConfig, 'bucketName' | 'distributionId' | 'distributionDomain' | 'edgeFunctionArn' | 'rendererFunctionArn'>> {
+function isByoi(
+  config: AwsConfig
+): config is AwsConfig &
+  Required<
+    Pick<
+      AwsConfig,
+      | 'bucketName'
+      | 'distributionId'
+      | 'distributionDomain'
+      | 'edgeFunctionArn'
+      | 'rendererFunctionArn'
+    >
+  > {
   return !!(
     config.bucketName &&
     config.distributionId &&
@@ -153,7 +170,9 @@ function isByoi(config: AwsConfig): config is AwsConfig &
 /**
  * Build AwsResources from BYOI config (no CloudFormation).
  */
-function byoiResources(config: AwsConfig & { bucketName: string }): AwsResources {
+function byoiResources(
+  config: AwsConfig & { bucketName: string }
+): AwsResources {
   return {
     provider: 'aws',
     region: 'us-east-1',
@@ -162,7 +181,7 @@ function byoiResources(config: AwsConfig & { bucketName: string }): AwsResources
     distributionId: config.distributionId!,
     distributionDomain: config.distributionDomain!,
     edgeFunctionArn: config.edgeFunctionArn!,
-    rendererFunctionArn: config.rendererFunctionArn!,
+    rendererFunctionArn: config.rendererFunctionArn!
   };
 }
 
@@ -195,7 +214,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
   const region = 'us-east-1';
   const byoi = isByoi(awsConfig);
 
-  const stackName = byoi ? '' : (awsConfig.stackName || STACK_NAME_PREFIX);
+  const stackName = byoi ? '' : awsConfig.stackName || STACK_NAME_PREFIX;
   const bucketName = awsConfig.bucketName || `${stackName}-content`;
 
   return {
@@ -219,7 +238,9 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         );
         const status = existing.Stacks?.[0]?.StackStatus;
         if (status === 'ROLLBACK_COMPLETE' || status === 'DELETE_FAILED') {
-          console.log(`[clara/aws] Found failed stack (${status}). Deleting before retry...`);
+          console.log(
+            `[clara/aws] Found failed stack (${status}). Deleting before retry...`
+          );
           await cfn.send(new DeleteStackCommand({ StackName: stackName }));
           await waitUntilStackDeleteComplete(
             { client: cfn, maxWaitTime: 300 },
@@ -237,7 +258,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         new CreateStackCommand({
           StackName: stackName,
           TemplateBody: JSON.stringify(template),
-          Capabilities: ['CAPABILITY_IAM'],
+          Capabilities: ['CAPABILITY_IAM']
         })
       );
 
@@ -292,7 +313,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         bucketName: res.bucketName,
         rendererArn: res.rendererFunctionArn,
         region: res.region,
-        distributionDomain: res.distributionDomain,
+        distributionDomain: res.distributionDomain
       });
 
       const lambda = new LambdaClient({ region: res.region });
@@ -301,23 +322,27 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       await lambda.send(
         new UpdateFunctionCodeCommand({
           FunctionName: res.edgeFunctionArn,
-          ZipFile: edgeZip,
+          ZipFile: edgeZip
         })
       );
 
       // 3. Publish new version (Lambda@Edge requires published versions)
       const versionResult = await lambda.send(
         new PublishVersionCommand({
-          FunctionName: res.edgeFunctionArn,
+          FunctionName: res.edgeFunctionArn
         })
       );
 
       const newVersionArn = versionResult.FunctionArn;
       if (!newVersionArn) {
-        throw new Error('[clara/aws] Failed to publish new edge handler version');
+        throw new Error(
+          '[clara/aws] Failed to publish new edge handler version'
+        );
       }
 
-      console.log(`[clara/aws] Published edge handler version: ${newVersionArn}`);
+      console.log(
+        `[clara/aws] Published edge handler version: ${newVersionArn}`
+      );
 
       // 4. Update CloudFront to use the new edge handler version
       console.log('[clara/aws] Updating CloudFront distribution...');
@@ -332,7 +357,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       await lambda.send(
         new UpdateFunctionCodeCommand({
           FunctionName: res.rendererFunctionArn,
-          ZipFile: rendererZip,
+          ZipFile: rendererZip
         })
       );
 
@@ -345,9 +370,9 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
             CallerReference: `clara-${Date.now()}`,
             Paths: {
               Quantity: 1,
-              Items: ['/*'],
-            },
-          },
+              Items: ['/*']
+            }
+          }
         })
       );
 
@@ -395,9 +420,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       console.log('[clara/aws] Deleting CloudFormation stack...');
       const cfn = new CloudFormationClient({ region: res.region });
 
-      await cfn.send(
-        new DeleteStackCommand({ StackName: res.stackName })
-      );
+      await cfn.send(new DeleteStackCommand({ StackName: res.stackName }));
 
       console.log(
         '[clara/aws] Waiting for stack deletion (this may take a few minutes)...'
@@ -409,6 +432,6 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       );
 
       console.log('[clara/aws] Infrastructure deleted');
-    },
+    }
   };
 }
