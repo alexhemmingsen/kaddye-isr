@@ -156,7 +156,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
             ZipFile: 'exports.handler = async (event) => event.Records[0].cf.response;',
           },
           MemorySize: 128,
-          Timeout: 5,
+          Timeout: 30,
         },
       },
 
@@ -166,6 +166,25 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
         Properties: {
           FunctionName: { Ref: 'EdgeHandlerFunction' },
           Description: 'Initial placeholder version',
+        },
+      },
+
+      // Permission for CloudFront/Lambda@Edge replication to invoke the function
+      EdgeHandlerPermission: {
+        Type: 'AWS::Lambda::Permission',
+        Properties: {
+          FunctionName: { Ref: 'EdgeHandlerFunction' },
+          Action: 'lambda:GetFunction',
+          Principal: 'edgelambda.amazonaws.com',
+        },
+      },
+
+      EdgeHandlerReplicationPermission: {
+        Type: 'AWS::Lambda::Permission',
+        Properties: {
+          FunctionName: { Ref: 'EdgeHandlerFunction' },
+          Action: 'lambda:GetFunction',
+          Principal: 'replicator.lambda.amazonaws.com',
         },
       },
 

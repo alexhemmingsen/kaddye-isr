@@ -10,7 +10,9 @@ import {
 import {
   LambdaClient,
   UpdateFunctionCodeCommand,
+  UpdateFunctionConfigurationCommand,
   PublishVersionCommand,
+  AddPermissionCommand,
   waitUntilFunctionUpdatedV2,
 } from '@aws-sdk/client-lambda';
 import {
@@ -326,6 +328,19 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         { FunctionName: res.edgeFunctionArn }
       );
 
+      // Ensure edge handler has adequate timeout (30s for origin-response)
+      await lambda.send(
+        new UpdateFunctionConfigurationCommand({
+          FunctionName: res.edgeFunctionArn,
+          Timeout: 30,
+        })
+      );
+
+      await waitUntilFunctionUpdatedV2(
+        { client: lambda, maxWaitTime: 120 },
+        { FunctionName: res.edgeFunctionArn }
+      );
+
       console.log('[clara/aws] Deploying edge handler...');
       await lambda.send(
         new UpdateFunctionCodeCommand({
@@ -357,6 +372,40 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       console.log(
         `[clara/aws] Published edge handler version: ${newVersionArn}`
       );
+
+      // 3b. Add permission for CloudFront/Lambda@Edge to invoke this version
+      try {
+        await lambda.send(
+          new AddPermissionCommand({
+            FunctionName: res.edgeFunctionArn,
+            Qualifier: versionResult.Version,
+            StatementId: `CloudFrontInvoke-${versionResult.Version}`,
+            Action: 'lambda:GetFunction',
+            Principal: 'edgelambda.amazonaws.com',
+          })
+        );
+      } catch (err) {
+        // Permission may already exist from a previous deploy
+        if (!(err as Error).message?.includes('already exists')) {
+          throw err;
+        }
+      }
+
+      try {
+        await lambda.send(
+          new AddPermissionCommand({
+            FunctionName: res.edgeFunctionArn,
+            Qualifier: versionResult.Version,
+            StatementId: `ReplicatorInvoke-${versionResult.Version}`,
+            Action: 'lambda:GetFunction',
+            Principal: 'replicator.lambda.amazonaws.com',
+          })
+        );
+      } catch (err) {
+        if (!(err as Error).message?.includes('already exists')) {
+          throw err;
+        }
+      }
 
       // 4. Update CloudFront to use the new edge handler version
       console.log('[clara/aws] Updating CloudFront distribution...');
