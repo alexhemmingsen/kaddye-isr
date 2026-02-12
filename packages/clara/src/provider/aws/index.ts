@@ -214,8 +214,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
   const region = 'us-east-1';
   const byoi = isByoi(awsConfig);
 
-  const stackName = byoi ? '' : awsConfig.stackName || STACK_NAME_PREFIX;
-  const bucketName = awsConfig.bucketName || `${stackName}-content`;
+  const stackName = byoi ? '' : (awsConfig.stackName || STACK_NAME_PREFIX);
 
   return {
     name: 'aws',
@@ -228,7 +227,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         return byoiResources(awsConfig as AwsConfig & { bucketName: string });
       }
 
-      const template = buildTemplate({ stackName, region, bucketName });
+      const template = buildTemplate({ stackName, region });
       const cfn = new CloudFormationClient({ region });
 
       // Check for a failed stack from a previous attempt and clean it up

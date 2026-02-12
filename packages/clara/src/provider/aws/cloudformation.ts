@@ -1,7 +1,6 @@
 export interface CloudFormationConfig {
   stackName: string;
   region: string;
-  bucketName: string;
 }
 
 /**
@@ -25,7 +24,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
       ContentBucket: {
         Type: 'AWS::S3::Bucket',
         Properties: {
-          BucketName: config.bucketName,
+          // No BucketName — let CloudFormation auto-generate a unique name
           PublicAccessBlockConfiguration: {
             BlockPublicAcls: true,
             BlockPublicPolicy: true,
