@@ -162,18 +162,33 @@ async function invokeRenderer(uri: string): Promise<void> {
 
 // ── Response builder ─────────────────────────────────────────────
 
-function buildHtmlResponse(html: string): CloudFrontResponse {
+// Lambda@Edge read-only headers — must be preserved from the original response
+const READ_ONLY_HEADERS = ['transfer-encoding', 'via'];
+
+function buildHtmlResponse(
+  html: string,
+  originalResponse: CloudFrontResponse
+): CloudFrontResponse {
+  const headers: Record<string, Array<{ key: string; value: string }>> = {
+    'content-type': [
+      { key: 'Content-Type', value: 'text/html; charset=utf-8' },
+    ],
+    'cache-control': [
+      { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' },
+    ],
+  };
+
+  // Preserve read-only headers from the original response to avoid 502
+  for (const headerName of READ_ONLY_HEADERS) {
+    if (originalResponse.headers[headerName]) {
+      headers[headerName] = originalResponse.headers[headerName];
+    }
+  }
+
   return {
     status: '200',
     statusDescription: 'OK',
-    headers: {
-      'content-type': [
-        { key: 'Content-Type', value: 'text/html; charset=utf-8' },
-      ],
-      'cache-control': [
-        { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' },
-      ],
-    },
+    headers,
     body: html,
   };
 }
@@ -204,7 +219,7 @@ export async function handler(
   if (isBypass) {
     const html = await getIndexHtml();
     if (!html) return response; // Can't help — return original error
-    return buildHtmlResponse(html);
+    return buildHtmlResponse(html, response);
   }
 
   // 3. Fetch manifest and check if this URL matches a Clara dynamic route
@@ -222,5 +237,5 @@ export async function handler(
   }
 
   // 6. Serve the SPA shell
-  return buildHtmlResponse(html);
+  return buildHtmlResponse(html, response);
 }
