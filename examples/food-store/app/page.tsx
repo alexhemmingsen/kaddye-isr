@@ -1,10 +1,8 @@
-const products = [
-  { id: '1', name: 'Organic Mango', price: 3.99 },
-  { id: '2', name: 'Sourdough Bread', price: 5.49 },
-  { id: '3', name: 'Greek Yogurt', price: 4.29 },
-];
+import { getProducts } from '../lib/supabase';
 
-export default function Home() {
+export default async function Home() {
+  const products = await getProducts();
+
   return (
     <div>
       <h1>Products</h1>

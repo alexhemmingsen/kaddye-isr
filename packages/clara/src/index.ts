@@ -1,9 +1,10 @@
 export type {
-  KaddyeRoute,
-  KaddyePluginConfig,
-  KaddyeProvider,
+  ClaraRoute,
+  ClaraPluginConfig,
+  ClaraProvider,
+  ClaraDeployConfig,
   ProviderResources,
-  KaddyeManifest,
+  ClaraManifest,
   ManifestRoute,
   RouteMatch,
 } from './types.js';

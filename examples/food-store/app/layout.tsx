@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'Food Store',
-  description: 'A demo food store powered by Kaddye',
+  description: 'A demo food store powered by Clara',
 };
 
 export default function RootLayout({

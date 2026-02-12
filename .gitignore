@@ -3,6 +3,6 @@ dist
 out
 .next
 *.tsbuildinfo
-.kaddye
+.clara
 .env
 .env.local

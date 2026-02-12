@@ -1,4 +1,4 @@
-import type { KaddyeRoute, KaddyeManifest, ManifestRoute, RouteMatch } from './types.js';
+import type { ClaraRoute, ClaraManifest, ManifestRoute, RouteMatch } from './types.js';
 
 /**
  * Extract parameter names from a route pattern.
@@ -49,7 +49,7 @@ export function matchRoute(url: string, routes: ManifestRoute[]): RouteMatch | n
 /**
  * Build a manifest from route definitions.
  */
-export function buildManifest(routes: KaddyeRoute[]): KaddyeManifest {
+export function buildManifest(routes: ClaraRoute[]): ClaraManifest {
   return {
     version: 1,
     routes: routes.map((route) => ({

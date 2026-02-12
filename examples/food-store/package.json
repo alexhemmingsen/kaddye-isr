@@ -7,14 +7,15 @@
     "start": "next start"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
+    "clara": "workspace:*",
     "next": "^15.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "kaddye": "workspace:*"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
     "typescript": "^5.7.0"
   }
 }

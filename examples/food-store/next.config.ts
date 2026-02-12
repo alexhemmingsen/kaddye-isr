@@ -1,9 +1,9 @@
-import { withKaddye } from 'kaddye/next';
-import { aws } from 'kaddye/aws';
+import { withClara } from 'clara/next';
+import { aws } from 'clara/aws';
 
-export default withKaddye({
+export default withClara({
   routes: [{ pattern: '/product/:id' }],
-  provider: aws({ region: 'eu-west-1' }),
+  provider: aws()
 })({
-  output: 'export',
+  output: 'export'
 });
