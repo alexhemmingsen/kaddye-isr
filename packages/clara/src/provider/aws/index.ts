@@ -1,13 +1,12 @@
 import {
   CloudFormationClient,
   CreateStackCommand,
-  UpdateStackCommand,
   DescribeStacksCommand,
   DescribeStackEventsCommand,
   DeleteStackCommand,
+  ListStackResourcesCommand,
   waitUntilStackCreateComplete,
   waitUntilStackDeleteComplete,
-  waitUntilStackUpdateComplete,
 } from '@aws-sdk/client-cloudformation';
 import {
   LambdaClient,
@@ -17,6 +16,10 @@ import {
   AddPermissionCommand,
   waitUntilFunctionUpdatedV2,
 } from '@aws-sdk/client-lambda';
+import {
+  IAMClient,
+  PutRolePolicyCommand,
+} from '@aws-sdk/client-iam';
 import {
   CloudFrontClient,
   GetDistributionConfigCommand,
@@ -260,30 +263,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       }
 
       if (stackExists) {
-        // Update existing stack with latest template (e.g. new IAM policies)
-        console.log(`[clara/aws] Updating CloudFormation stack: ${stackName}`);
-        try {
-          await cfn.send(
-            new UpdateStackCommand({
-              StackName: stackName,
-              TemplateBody: JSON.stringify(template),
-              Capabilities: ['CAPABILITY_IAM'],
-            })
-          );
-
-          console.log('[clara/aws] Waiting for stack update...');
-          await waitUntilStackUpdateComplete(
-            { client: cfn, maxWaitTime: 600 },
-            { StackName: stackName }
-          );
-          console.log('[clara/aws] Stack updated successfully');
-        } catch (err) {
-          // "No updates are to be performed" is not an error
-          if (!(err as Error).message?.includes('No updates')) {
-            throw err;
-          }
-          console.log('[clara/aws] Stack is already up to date');
-        }
+        console.log(`[clara/aws] Stack ${stackName} already exists`);
       } else {
         console.log(`[clara/aws] Creating CloudFormation stack: ${stackName}`);
 
@@ -454,6 +434,55 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
           ZipFile: rendererZip
         })
       );
+
+      // 5b. Ensure renderer has S3 read permissions (for shell template lookup)
+      //     Uses IAM API directly (not UpdateStack, which would revert CloudFront config)
+      console.log('[clara/aws] Ensuring renderer permissions...');
+      try {
+        const cfn = new CloudFormationClient({ region: res.region });
+        const stackResources = await cfn.send(
+          new ListStackResourcesCommand({ StackName: res.stackName })
+        );
+
+        const rendererRole = stackResources.StackResourceSummaries?.find(
+          (r) => r.LogicalResourceId === 'RendererRole'
+        );
+        const contentBucket = stackResources.StackResourceSummaries?.find(
+          (r) => r.LogicalResourceId === 'ContentBucket'
+        );
+
+        if (rendererRole?.PhysicalResourceId && contentBucket?.PhysicalResourceId) {
+          const iam = new IAMClient({ region: res.region });
+          const bucketArn = `arn:aws:s3:::${contentBucket.PhysicalResourceId}`;
+
+          await iam.send(
+            new PutRolePolicyCommand({
+              RoleName: rendererRole.PhysicalResourceId,
+              PolicyName: 'ClaraRendererS3ReadPolicy',
+              PolicyDocument: JSON.stringify({
+                Version: '2012-10-17',
+                Statement: [
+                  {
+                    Effect: 'Allow',
+                    Action: ['s3:GetObject'],
+                    Resource: `${bucketArn}/*`,
+                  },
+                  {
+                    Effect: 'Allow',
+                    Action: ['s3:ListBucket'],
+                    Resource: bucketArn,
+                  },
+                ],
+              }),
+            })
+          );
+          console.log('[clara/aws] Renderer S3 read permissions applied');
+        }
+      } catch (err) {
+        console.warn(
+          `[clara/aws] Could not update renderer permissions: ${(err as Error).message}`
+        );
+      }
 
       // 6. Invalidate CloudFront cache
       console.log('[clara/aws] Invalidating CloudFront cache...');
