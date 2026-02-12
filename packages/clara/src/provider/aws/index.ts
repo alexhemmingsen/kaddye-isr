@@ -10,7 +10,8 @@ import {
 import {
   LambdaClient,
   UpdateFunctionCodeCommand,
-  PublishVersionCommand
+  PublishVersionCommand,
+  waitUntilFunctionUpdatedV2,
 } from '@aws-sdk/client-lambda';
 import {
   CloudFrontClient,
@@ -318,12 +319,25 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
 
       const lambda = new LambdaClient({ region: res.region });
 
+      // Wait for the function to be ready (may still be updating from stack creation)
+      console.log('[clara/aws] Waiting for edge handler to be ready...');
+      await waitUntilFunctionUpdatedV2(
+        { client: lambda, maxWaitTime: 120 },
+        { FunctionName: res.edgeFunctionArn }
+      );
+
       console.log('[clara/aws] Deploying edge handler...');
       await lambda.send(
         new UpdateFunctionCodeCommand({
           FunctionName: res.edgeFunctionArn,
           ZipFile: edgeZip
         })
+      );
+
+      // Wait for the update to complete before publishing a version
+      await waitUntilFunctionUpdatedV2(
+        { client: lambda, maxWaitTime: 120 },
+        { FunctionName: res.edgeFunctionArn }
       );
 
       // 3. Publish new version (Lambda@Edge requires published versions)
