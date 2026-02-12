@@ -12,6 +12,7 @@
 import { build } from 'esbuild';
 import { mkdirSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import archiver from 'archiver';
 import { Writable } from 'node:stream';
 
@@ -22,14 +23,9 @@ const BUNDLE_DIR = join('.clara', 'bundles');
  * Works in both ESM (import.meta.url) and CJS (__dirname).
  */
 function getModuleDir(): string {
-  // In CJS, __dirname is available
   if (typeof __dirname !== 'undefined') {
     return __dirname;
   }
-  // In ESM, use import.meta.url
-  // @ts-ignore — import.meta is only available in ESM
-  const { fileURLToPath } = require('node:url');
-  // @ts-ignore
   return dirname(fileURLToPath(import.meta.url));
 }
 
