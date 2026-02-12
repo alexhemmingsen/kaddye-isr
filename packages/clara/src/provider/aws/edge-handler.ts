@@ -14,6 +14,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 declare const __CLARA_BUCKET_NAME__: string;
 declare const __CLARA_RENDERER_ARN__: string;
 declare const __CLARA_REGION__: string;
+declare const __CLARA_DISTRIBUTION_DOMAIN__: string;
 
 // ── Types (inlined to keep bundle self-contained) ────────────────
 
@@ -150,6 +151,7 @@ async function invokeRenderer(uri: string): Promise<void> {
         Payload: JSON.stringify({
           uri,
           bucket: __CLARA_BUCKET_NAME__,
+          distributionDomain: __CLARA_DISTRIBUTION_DOMAIN__,
         }),
       })
     );

@@ -218,13 +218,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
           },
           MemorySize: 2048,
           Timeout: 60,
-          Environment: {
-            Variables: {
-              CLARA_DISTRIBUTION_DOMAIN: {
-                'Fn::GetAtt': ['Distribution', 'DomainName'],
-              },
-            },
-          },
+          // distributionDomain is passed via invocation payload from the edge handler
         },
       },
 

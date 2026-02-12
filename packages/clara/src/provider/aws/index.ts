@@ -255,6 +255,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         bucketName: res.bucketName,
         rendererArn: res.rendererFunctionArn,
         region: res.region,
+        distributionDomain: res.distributionDomain,
       });
 
       const lambda = new LambdaClient({ region: res.region });

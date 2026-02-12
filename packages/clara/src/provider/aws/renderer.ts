@@ -22,6 +22,8 @@ interface RendererEvent {
   uri: string;
   /** S3 bucket name to upload the rendered HTML to */
   bucket: string;
+  /** CloudFront distribution domain for loading the SPA shell */
+  distributionDomain: string;
 }
 
 interface RendererResult {
@@ -41,14 +43,13 @@ function deriveS3Key(uri: string): string {
 }
 
 export async function handler(event: RendererEvent): Promise<RendererResult> {
-  const { uri, bucket } = event;
-  const distributionDomain = process.env.CLARA_DISTRIBUTION_DOMAIN;
+  const { uri, bucket, distributionDomain } = event;
   const region = process.env.AWS_REGION || 'us-east-1';
 
   if (!distributionDomain) {
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'CLARA_DISTRIBUTION_DOMAIN not set' }),
+      body: JSON.stringify({ error: 'distributionDomain not provided in event' }),
     };
   }
 

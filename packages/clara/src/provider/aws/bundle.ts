@@ -60,6 +60,7 @@ export interface EdgeHandlerConfig {
   bucketName: string;
   rendererArn: string;
   region: string;
+  distributionDomain: string;
 }
 
 /**
@@ -89,6 +90,7 @@ export async function bundleEdgeHandler(
       __CLARA_BUCKET_NAME__: JSON.stringify(config.bucketName),
       __CLARA_RENDERER_ARN__: JSON.stringify(config.rendererArn),
       __CLARA_REGION__: JSON.stringify(config.region),
+      __CLARA_DISTRIBUTION_DOMAIN__: JSON.stringify(config.distributionDomain),
     },
     // Bundle everything — Lambda@Edge must be self-contained
     external: [],
