@@ -33,6 +33,7 @@ import type {
   ClaraPluginConfig,
   ProviderResources
 } from '../../types.js';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createS3Client, syncToS3, emptyBucket } from './s3.js';
 import { buildTemplate } from './cloudformation.js';
 import { bundleEdgeHandler, bundleRenderer } from './bundle.js';
@@ -158,20 +159,39 @@ async function updateCloudFrontEdgeVersion(
 /**
  * Publish the Chromium Lambda Layer.
  *
- * Packages @sparticuz/chromium into a Lambda Layer ZIP and publishes it.
+ * The layer ZIP is ~60MB+ which exceeds the direct upload limit (50MB),
+ * so we upload it to S3 first and reference it via S3Bucket/S3Key.
+ *
  * Returns the versioned layer ARN.
  */
 async function publishChromiumLayer(
-  lambda: LambdaClient
+  lambda: LambdaClient,
+  s3: S3Client,
+  bucketName: string
 ): Promise<string> {
   const zipBuffer = await buildChromiumLayerZip();
+  const layerKey = '_clara/chromium-layer.zip';
+
+  // Upload ZIP to S3 (direct PublishLayerVersion has a 50MB limit)
+  console.log(
+    `[clara/aws] Uploading Chromium layer to S3 (${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB)...`
+  );
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: bucketName,
+      Key: layerKey,
+      Body: zipBuffer,
+      ContentType: 'application/zip',
+    })
+  );
 
   const result = await lambda.send(
     new PublishLayerVersionCommand({
       LayerName: 'clara-chromium',
       Description: 'Chromium binary for Clara renderer (@sparticuz/chromium)',
       Content: {
-        ZipFile: new Uint8Array(zipBuffer),
+        S3Bucket: bucketName,
+        S3Key: layerKey,
       },
       CompatibleRuntimes: ['nodejs20.x'],
     })
@@ -341,10 +361,11 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const outputs = await getStackOutputs(cfn, stackName);
       const resources = outputsToResources(stackName, region, outputs);
 
-      // Publish Chromium Lambda Layer for the renderer
+      // Publish Chromium Lambda Layer for the renderer (via S3 — too large for direct upload)
       console.log('[clara/aws] Publishing Chromium Lambda Layer...');
       const lambda = new LambdaClient({ region });
-      const layerArn = await publishChromiumLayer(lambda);
+      const s3 = createS3Client(region);
+      const layerArn = await publishChromiumLayer(lambda, s3, resources.bucketName);
       resources.chromiumLayerArn = layerArn;
       console.log(`[clara/aws] Chromium layer published: ${layerArn}`);
 
@@ -471,9 +492,9 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const cf = new CloudFrontClient({ region: res.region });
       await updateCloudFrontEdgeVersion(cf, res.distributionId, newVersionArn);
 
-      // 5. Publish Chromium Lambda Layer
+      // 5. Publish Chromium Lambda Layer (via S3 — too large for direct upload)
       console.log('[clara/aws] Publishing Chromium Lambda Layer...');
-      const chromiumLayerArn = await publishChromiumLayer(lambda);
+      const chromiumLayerArn = await publishChromiumLayer(lambda, s3, res.bucketName);
       console.log(`[clara/aws] Chromium layer: ${chromiumLayerArn}`);
 
       // 5a. Bundle and deploy renderer
