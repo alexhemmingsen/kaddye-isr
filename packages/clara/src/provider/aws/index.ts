@@ -35,6 +35,7 @@ import { createS3Client, syncToS3, emptyBucket } from './s3.js';
 import { buildTemplate } from './cloudformation.js';
 import { bundleEdgeHandler, bundleRenderer } from './bundle.js';
 import { STACK_NAME_PREFIX } from './constants.js';
+import { generateFallbacks } from '../../fallback.js';
 
 export interface AwsConfig {
   stackName?: string;
@@ -309,13 +310,18 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
     },
 
     async deploy(
-      _config: ClaraPluginConfig,
+      config: ClaraPluginConfig,
       resources: ProviderResources,
       buildDir: string
     ): Promise<void> {
       const res = resources as AwsResources;
 
-      // 1. Sync build output to S3
+      // 0. Generate fallback pages for dynamic routes before uploading
+      console.log('[clara/aws] Generating fallback pages...');
+      const fallbacks = generateFallbacks(buildDir, config.routes);
+      console.log(`[clara/aws] Generated ${fallbacks.length} fallback page(s)`);
+
+      // 1. Sync build output to S3 (includes the generated fallback pages)
       console.log('[clara/aws] Syncing build output to S3...');
       const s3 = createS3Client(res.region);
       const fileCount = await syncToS3(s3, res.bucketName, buildDir);
@@ -435,8 +441,9 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         })
       );
 
-      // 5b. Ensure renderer has S3 read permissions (for shell template lookup)
+      // 5b. Ensure renderer has full S3 permissions (read fallback + write rendered pages)
       //     Uses IAM API directly (not UpdateStack, which would revert CloudFront config)
+      //     This covers cases where the stack was created with an older CloudFormation template
       console.log('[clara/aws] Ensuring renderer permissions...');
       try {
         const cfn = new CloudFormationClient({ region: res.region });
@@ -458,13 +465,13 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
           await iam.send(
             new PutRolePolicyCommand({
               RoleName: rendererRole.PhysicalResourceId,
-              PolicyName: 'ClaraRendererS3ReadPolicy',
+              PolicyName: 'ClaraRendererS3Policy',
               PolicyDocument: JSON.stringify({
                 Version: '2012-10-17',
                 Statement: [
                   {
                     Effect: 'Allow',
-                    Action: ['s3:GetObject'],
+                    Action: ['s3:GetObject', 's3:PutObject'],
                     Resource: `${bucketArn}/*`,
                   },
                   {
@@ -476,7 +483,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
               }),
             })
           );
-          console.log('[clara/aws] Renderer S3 read permissions applied');
+          console.log('[clara/aws] Renderer S3 permissions applied');
         }
       } catch (err) {
         console.warn(

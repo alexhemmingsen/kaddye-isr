@@ -5,6 +5,17 @@
  * It does NOT run in the developer's Node.js — it runs at CloudFront edge locations.
  *
  * Config values are injected at bundle time via esbuild `define` (Lambda@Edge has no env vars).
+ *
+ * Flow for a request to /product/5:
+ * 1. CloudFront viewer-request rewrites /product/5 → /product/5.html
+ * 2. S3 returns 403 (file doesn't exist, OAC treats missing as 403)
+ * 3. This origin-response handler intercepts:
+ *    a. Reads product/_fallback.html from S3
+ *    b. Replaces __CLARA_FALLBACK__ placeholder with "5"
+ *    c. Serves the patched fallback (user sees loading state, then client fetches data)
+ *    d. Invokes the renderer Lambda asynchronously (fire-and-forget)
+ *    e. Renderer uses Puppeteer to render the page, captures HTML with SEO metadata
+ *    f. Renderer uploads product/5.html to S3 — next request gets the cached version
  */
 
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -55,6 +66,11 @@ interface CloudFrontResponseEvent {
   }>;
 }
 
+// ── Constants ────────────────────────────────────────────────────
+
+const FALLBACK_FILENAME = '_fallback.html';
+const FALLBACK_PLACEHOLDER = '__CLARA_FALLBACK__';
+
 // ── Caching ──────────────────────────────────────────────────────
 
 interface CacheEntry<T> {
@@ -63,10 +79,10 @@ interface CacheEntry<T> {
 }
 
 const MANIFEST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const INDEX_CACHE_TTL = 60 * 1000; // 1 minute
+const FALLBACK_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 let manifestCache: CacheEntry<ClaraManifest> = { data: null, expiry: 0 };
-let indexHtmlCache: CacheEntry<string> = { data: null, expiry: 0 };
+const fallbackCache: Map<string, CacheEntry<string>> = new Map();
 
 // ── Route matching (inlined from routes.ts) ──────────────────────
 
@@ -116,61 +132,87 @@ async function getManifest(): Promise<ClaraManifest | null> {
   }
 }
 
-async function getIndexHtml(): Promise<string | null> {
-  if (indexHtmlCache.data && Date.now() < indexHtmlCache.expiry) {
-    return indexHtmlCache.data;
+/**
+ * Get the fallback HTML for a route.
+ * Looks up the _fallback.html file in the route's directory in S3.
+ *
+ * '/product/:id' → reads 'product/_fallback.html' from S3
+ */
+async function getFallbackHtml(route: ManifestRoute): Promise<string | null> {
+  // Derive the fallback S3 key from the route pattern
+  const parts = route.pattern.replace(/^\//, '').split('/');
+  const dirParts = parts.filter(p => !p.startsWith(':'));
+  const fallbackKey = [...dirParts, FALLBACK_FILENAME].join('/');
+
+  // Check cache
+  const cached = fallbackCache.get(fallbackKey);
+  if (cached?.data && Date.now() < cached.expiry) {
+    return cached.data;
   }
 
   try {
     const response = await s3.send(
       new GetObjectCommand({
         Bucket: __CLARA_BUCKET_NAME__,
-        Key: 'index.html',
+        Key: fallbackKey,
       })
     );
     const body = await response.Body?.transformToString('utf-8');
     if (!body) return null;
 
-    indexHtmlCache = { data: body, expiry: Date.now() + INDEX_CACHE_TTL };
+    fallbackCache.set(fallbackKey, {
+      data: body,
+      expiry: Date.now() + FALLBACK_CACHE_TTL,
+    });
     return body;
   } catch {
     return null;
   }
 }
 
+/**
+ * Patch the fallback HTML by replacing __CLARA_FALLBACK__ with actual param values.
+ */
+function patchFallback(html: string, params: Record<string, string>): string {
+  let patched = html;
+
+  // For now, all params use the same placeholder. Replace with the last param value
+  // (which is the dynamic segment — e.g., the product ID).
+  // For multi-param routes like /blog/:year/:slug, we'd need per-param placeholders.
+  const paramValues = Object.values(params);
+  const lastParam = paramValues[paramValues.length - 1] || '';
+
+  patched = patched.replace(new RegExp(FALLBACK_PLACEHOLDER, 'g'), lastParam);
+
+  return patched;
+}
+
 // ── Renderer invocation ──────────────────────────────────────────
 
 const lambda = new LambdaClient({ region: __CLARA_REGION__ });
 
-async function invokeRenderer(uri: string): Promise<string | null> {
-  try {
-    const result = await lambda.send(
+/**
+ * Invoke the renderer Lambda asynchronously (fire-and-forget).
+ * The renderer will use Puppeteer to render the page with full client-side content,
+ * capture the HTML with SEO metadata, and upload it to S3.
+ */
+function invokeRendererAsync(uri: string): void {
+  // Fire-and-forget — don't await the result
+  lambda
+    .send(
       new InvokeCommand({
         FunctionName: __CLARA_RENDERER_ARN__,
-        InvocationType: 'RequestResponse', // synchronous — wait for rendered HTML
+        InvocationType: 'Event', // Async invocation
         Payload: JSON.stringify({
           uri,
           bucket: __CLARA_BUCKET_NAME__,
           distributionDomain: __CLARA_DISTRIBUTION_DOMAIN__,
         }),
       })
-    );
-
-    if (result.Payload) {
-      const payload = JSON.parse(
-        typeof result.Payload === 'string'
-          ? result.Payload
-          : new TextDecoder().decode(result.Payload)
-      );
-      if (payload.statusCode === 200) {
-        const body = JSON.parse(payload.body);
-        return body.html || null;
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
+    )
+    .catch(() => {
+      // Silently ignore — renderer failures don't affect the user's request
+    });
 }
 
 // ── Response builder ─────────────────────────────────────────────
@@ -215,9 +257,7 @@ export async function handler(
   const response = record.response;
   const request = record.request;
   const uri = request.uri;
-  const querystring = request.querystring || '';
   const status = parseInt(response.status, 10);
-  const isBypass = querystring.includes('__clara_bypass');
 
   // 1. If response is 200 (file exists in S3), pass through
   if (status !== 403 && status !== 404) {
@@ -226,29 +266,27 @@ export async function handler(
 
   // At this point, the file does NOT exist in S3 (403 from OAC or 404)
 
-  // 2. If bypass param is present: serve index.html but do NOT invoke renderer.
-  //    This is used by Puppeteer — it needs the SPA shell to render the page,
-  //    but we must not trigger another render (infinite loop).
-  if (isBypass) {
-    const html = await getIndexHtml();
-    if (!html) return response; // Can't help — return original error
-    return buildHtmlResponse(html, response);
-  }
-
-  // 3. Fetch manifest and check if this URL matches a Clara dynamic route
+  // 2. Fetch manifest and check if this URL matches a Clara dynamic route
   const manifest = await getManifest();
-  const match = manifest ? matchRoute(uri, manifest.routes) : null;
+  // Strip .html suffix that the URL rewrite function adds before matching
+  const cleanUri = uri.replace(/\.html$/, '');
+  const match = manifest ? matchRoute(cleanUri, manifest.routes) : null;
 
-  // 4. If route matches: invoke the renderer synchronously and serve the result
+  // 3. If route matches: serve the fallback page and invoke renderer
   if (match) {
-    const renderedHtml = await invokeRenderer(uri);
-    if (renderedHtml) {
-      return buildHtmlResponse(renderedHtml, response);
+    const fallbackHtml = await getFallbackHtml(match.route);
+
+    if (fallbackHtml) {
+      // Patch the placeholder with actual param values
+      const patchedHtml = patchFallback(fallbackHtml, match.params);
+
+      // Fire off the renderer asynchronously — it will build the real page with SEO
+      invokeRendererAsync(cleanUri);
+
+      return buildHtmlResponse(patchedHtml, response);
     }
   }
 
-  // 5. Fallback: serve index.html as SPA shell
-  const html = await getIndexHtml();
-  if (!html) return response; // Can't help — return original error
-  return buildHtmlResponse(html, response);
+  // 4. No match or no fallback — return original error
+  return response;
 }

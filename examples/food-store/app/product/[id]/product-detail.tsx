@@ -3,31 +3,25 @@
 import { useEffect, useState } from 'react';
 import { supabase, type Product } from '../../../lib/supabase';
 
-export function ProductDetail({
-  id,
-  initial,
-}: {
-  id: string;
-  initial: Product | null;
-}) {
-  const [product, setProduct] = useState<Product | null>(initial);
-  const [loading, setLoading] = useState(!initial);
+export function ProductDetail({ id }: { id: string }) {
+  const [product, setProduct] = useState<Product | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // If we already have the product from build time, skip the fetch
-    if (initial) return;
-
-    // Runtime fetch — this runs when Puppeteer renders a new product page
     supabase
       .from('products')
       .select('*')
       .eq('id', id)
       .single()
       .then(({ data }) => {
-        setProduct(data);
+        if (data) {
+          setProduct(data);
+          // Update document title for SEO (captured by Clara's renderer)
+          document.title = `${data.name} | Food Store`;
+        }
         setLoading(false);
       });
-  }, [id, initial]);
+  }, [id]);
 
   if (loading) {
     return <div>Loading...</div>;

@@ -37,11 +37,5 @@ export default async function ProductPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-
-  // Try to load at build time (static export).
-  // If the product exists, pass it as initial data so the page renders immediately.
-  // If not (new product added after build), the client component fetches it.
-  const product = await getProduct(id);
-
-  return <ProductDetail id={id} initial={product} />;
+  return <ProductDetail id={id} />;
 }
