@@ -1,32 +1,15 @@
-import { getProducts } from '../lib/supabase';
+import type { Metadata } from 'next';
+import { ProductList } from './product-list';
 
-export default async function Home() {
-  const products = await getProducts();
+export const metadata: Metadata = {
+  title: 'Products | Food Store',
+  description: 'Browse our selection of products',
+  openGraph: {
+    title: 'Products | Food Store',
+    description: 'Browse our selection of products',
+  },
+};
 
-  return (
-    <div>
-      <h1>Products</h1>
-      <ul style={{ listStyle: 'none', padding: 0 }}>
-        {products.map((product) => (
-          <li key={product.id} style={{ marginBottom: '1rem' }}>
-            <a
-              href={`/product/${product.id}`}
-              style={{ textDecoration: 'none', color: 'inherit' }}
-            >
-              <div
-                style={{
-                  padding: '1rem',
-                  border: '1px solid #eee',
-                  borderRadius: '8px',
-                }}
-              >
-                <h2>{product.name}</h2>
-                <p>${product.price.toFixed(2)}</p>
-              </div>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+export default function Home() {
+  return <ProductList />;
 }

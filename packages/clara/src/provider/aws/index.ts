@@ -13,6 +13,8 @@ import {
   UpdateFunctionCodeCommand,
   UpdateFunctionConfigurationCommand,
   PublishVersionCommand,
+  PublishLayerVersionCommand,
+  GetFunctionConfigurationCommand,
   AddPermissionCommand,
   waitUntilFunctionUpdatedV2,
 } from '@aws-sdk/client-lambda';
@@ -36,6 +38,7 @@ import { buildTemplate } from './cloudformation.js';
 import { bundleEdgeHandler, bundleRenderer } from './bundle.js';
 import { STACK_NAME_PREFIX } from './constants.js';
 import { generateFallbacks } from '../../fallback.js';
+import { buildChromiumLayerZip } from './chromium-layer.js';
 
 export interface AwsConfig {
   stackName?: string;
@@ -59,6 +62,7 @@ export interface AwsResources extends ProviderResources {
   distributionDomain: string;
   edgeFunctionArn: string;
   rendererFunctionArn: string;
+  chromiumLayerArn?: string;
 }
 
 /**
@@ -149,6 +153,35 @@ async function updateCloudFrontEdgeVersion(
       IfMatch: etag
     })
   );
+}
+
+/**
+ * Publish the Chromium Lambda Layer.
+ *
+ * Packages @sparticuz/chromium into a Lambda Layer ZIP and publishes it.
+ * Returns the versioned layer ARN.
+ */
+async function publishChromiumLayer(
+  lambda: LambdaClient
+): Promise<string> {
+  const zipBuffer = await buildChromiumLayerZip();
+
+  const result = await lambda.send(
+    new PublishLayerVersionCommand({
+      LayerName: 'clara-chromium',
+      Description: 'Chromium binary for Clara renderer (@sparticuz/chromium)',
+      Content: {
+        ZipFile: new Uint8Array(zipBuffer),
+      },
+      CompatibleRuntimes: ['nodejs20.x'],
+    })
+  );
+
+  if (!result.LayerVersionArn) {
+    throw new Error('[clara/aws] Failed to publish Chromium layer');
+  }
+
+  return result.LayerVersionArn;
 }
 
 /**
@@ -306,7 +339,16 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       }
 
       const outputs = await getStackOutputs(cfn, stackName);
-      return outputsToResources(stackName, region, outputs);
+      const resources = outputsToResources(stackName, region, outputs);
+
+      // Publish Chromium Lambda Layer for the renderer
+      console.log('[clara/aws] Publishing Chromium Lambda Layer...');
+      const lambda = new LambdaClient({ region });
+      const layerArn = await publishChromiumLayer(lambda);
+      resources.chromiumLayerArn = layerArn;
+      console.log(`[clara/aws] Chromium layer published: ${layerArn}`);
+
+      return resources;
     },
 
     async deploy(
@@ -429,7 +471,12 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const cf = new CloudFrontClient({ region: res.region });
       await updateCloudFrontEdgeVersion(cf, res.distributionId, newVersionArn);
 
-      // 5. Bundle and deploy renderer
+      // 5. Publish Chromium Lambda Layer
+      console.log('[clara/aws] Publishing Chromium Lambda Layer...');
+      const chromiumLayerArn = await publishChromiumLayer(lambda);
+      console.log(`[clara/aws] Chromium layer: ${chromiumLayerArn}`);
+
+      // 5a. Bundle and deploy renderer
       console.log('[clara/aws] Bundling renderer...');
       const rendererZip = await bundleRenderer();
 
@@ -439,6 +486,28 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
           FunctionName: res.rendererFunctionArn,
           ZipFile: rendererZip
         })
+      );
+
+      // Wait for code update before changing configuration
+      await waitUntilFunctionUpdatedV2(
+        { client: lambda, maxWaitTime: 120 },
+        { FunctionName: res.rendererFunctionArn }
+      );
+
+      // 5a-ii. Attach Chromium layer and ensure adequate timeout/memory
+      console.log('[clara/aws] Configuring renderer with Chromium layer...');
+      await lambda.send(
+        new UpdateFunctionConfigurationCommand({
+          FunctionName: res.rendererFunctionArn,
+          Layers: [chromiumLayerArn],
+          MemorySize: 2048,
+          Timeout: 60,
+        })
+      );
+
+      await waitUntilFunctionUpdatedV2(
+        { client: lambda, maxWaitTime: 120 },
+        { FunctionName: res.rendererFunctionArn }
       );
 
       // 5b. Ensure renderer has full S3 permissions (read fallback + write rendered pages)
@@ -521,7 +590,27 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       try {
         const cfn = new CloudFormationClient({ region });
         const outputs = await getStackOutputs(cfn, stackName);
-        return outputsToResources(stackName, region, outputs);
+        const resources = outputsToResources(stackName, region, outputs);
+
+        // Try to get the existing Chromium layer ARN from the renderer config
+        try {
+          const lambda = new LambdaClient({ region });
+          const fnConfig = await lambda.send(
+            new GetFunctionConfigurationCommand({
+              FunctionName: resources.rendererFunctionArn,
+            })
+          );
+          const chromiumLayer = fnConfig.Layers?.find((l) =>
+            l.Arn?.includes('clara-chromium')
+          );
+          if (chromiumLayer?.Arn) {
+            resources.chromiumLayerArn = chromiumLayer.Arn;
+          }
+        } catch {
+          // Layer not yet attached — will be handled during deploy
+        }
+
+        return resources;
       } catch {
         return null;
       }
