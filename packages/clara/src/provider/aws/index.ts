@@ -31,6 +31,7 @@ import type {
   ClaraPluginConfig,
   ProviderResources
 } from '../../types.js';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { createS3Client, syncToS3, emptyBucket } from './s3.js';
 import { buildTemplate } from './cloudformation.js';
 import { bundleEdgeHandler, bundleRenderer } from './bundle.js';
@@ -429,15 +430,29 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const cf = new CloudFrontClient({ region: res.region });
       await updateCloudFrontEdgeVersion(cf, res.distributionId, newVersionArn);
 
-      // 5. Bundle and deploy renderer (includes @sparticuz/chromium in the ZIP)
+      // 5. Bundle and deploy renderer (includes chromium binaries in the ZIP)
+      //    The ZIP is ~70MB (chromium binaries), which exceeds Lambda's 50MB
+      //    direct upload limit. Upload to S3 first, then reference it.
       console.log('[clara/aws] Bundling renderer...');
       const rendererZip = await bundleRenderer();
+
+      const rendererZipKey = '_clara/renderer.zip';
+      console.log('[clara/aws] Uploading renderer ZIP to S3...');
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: res.bucketName,
+          Key: rendererZipKey,
+          Body: rendererZip,
+          ContentType: 'application/zip',
+        })
+      );
 
       console.log('[clara/aws] Deploying renderer...');
       await lambda.send(
         new UpdateFunctionCodeCommand({
           FunctionName: res.rendererFunctionArn,
-          ZipFile: rendererZip
+          S3Bucket: res.bucketName,
+          S3Key: rendererZipKey,
         })
       );
 
