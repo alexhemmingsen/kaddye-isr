@@ -14,7 +14,8 @@
  * 6. Patches the HTML <head> with the correct metadata
  * 7. Uploads the final SEO-complete HTML to S3 for future requests
  *
- * @sparticuz/chromium is provided via a Lambda Layer (marked as external in the bundle).
+ * @sparticuz/chromium JS is bundled by esbuild; its bin/ folder (chromium binary)
+ * is included separately in the ZIP at the root level.
  */
 
 import chromium from '@sparticuz/chromium';
@@ -115,7 +116,7 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
     browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
+      executablePath: await chromium.executablePath('/var/task/bin'),
       headless: chromium.headless,
     });
 

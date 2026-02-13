@@ -13,8 +13,6 @@ import {
   UpdateFunctionCodeCommand,
   UpdateFunctionConfigurationCommand,
   PublishVersionCommand,
-  PublishLayerVersionCommand,
-  GetFunctionConfigurationCommand,
   AddPermissionCommand,
   waitUntilFunctionUpdatedV2,
 } from '@aws-sdk/client-lambda';
@@ -33,13 +31,11 @@ import type {
   ClaraPluginConfig,
   ProviderResources
 } from '../../types.js';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createS3Client, syncToS3, emptyBucket } from './s3.js';
 import { buildTemplate } from './cloudformation.js';
 import { bundleEdgeHandler, bundleRenderer } from './bundle.js';
 import { STACK_NAME_PREFIX } from './constants.js';
 import { generateFallbacks } from '../../fallback.js';
-import { buildChromiumLayerZip } from './chromium-layer.js';
 
 export interface AwsConfig {
   stackName?: string;
@@ -63,7 +59,6 @@ export interface AwsResources extends ProviderResources {
   distributionDomain: string;
   edgeFunctionArn: string;
   rendererFunctionArn: string;
-  chromiumLayerArn?: string;
 }
 
 /**
@@ -154,54 +149,6 @@ async function updateCloudFrontEdgeVersion(
       IfMatch: etag
     })
   );
-}
-
-/**
- * Publish the Chromium Lambda Layer.
- *
- * The layer ZIP is ~60MB+ which exceeds the direct upload limit (50MB),
- * so we upload it to S3 first and reference it via S3Bucket/S3Key.
- *
- * Returns the versioned layer ARN.
- */
-async function publishChromiumLayer(
-  lambda: LambdaClient,
-  s3: S3Client,
-  bucketName: string
-): Promise<string> {
-  const zipBuffer = await buildChromiumLayerZip();
-  const layerKey = '_clara/chromium-layer.zip';
-
-  // Upload ZIP to S3 (direct PublishLayerVersion has a 50MB limit)
-  console.log(
-    `[clara/aws] Uploading Chromium layer to S3 (${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB)...`
-  );
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: bucketName,
-      Key: layerKey,
-      Body: zipBuffer,
-      ContentType: 'application/zip',
-    })
-  );
-
-  const result = await lambda.send(
-    new PublishLayerVersionCommand({
-      LayerName: 'clara-chromium',
-      Description: 'Chromium binary for Clara renderer (@sparticuz/chromium)',
-      Content: {
-        S3Bucket: bucketName,
-        S3Key: layerKey,
-      },
-      CompatibleRuntimes: ['nodejs20.x'],
-    })
-  );
-
-  if (!result.LayerVersionArn) {
-    throw new Error('[clara/aws] Failed to publish Chromium layer');
-  }
-
-  return result.LayerVersionArn;
 }
 
 /**
@@ -359,17 +306,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       }
 
       const outputs = await getStackOutputs(cfn, stackName);
-      const resources = outputsToResources(stackName, region, outputs);
-
-      // Publish Chromium Lambda Layer for the renderer (via S3 — too large for direct upload)
-      console.log('[clara/aws] Publishing Chromium Lambda Layer...');
-      const lambda = new LambdaClient({ region });
-      const s3 = createS3Client(region);
-      const layerArn = await publishChromiumLayer(lambda, s3, resources.bucketName);
-      resources.chromiumLayerArn = layerArn;
-      console.log(`[clara/aws] Chromium layer published: ${layerArn}`);
-
-      return resources;
+      return outputsToResources(stackName, region, outputs);
     },
 
     async deploy(
@@ -492,12 +429,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const cf = new CloudFrontClient({ region: res.region });
       await updateCloudFrontEdgeVersion(cf, res.distributionId, newVersionArn);
 
-      // 5. Publish Chromium Lambda Layer (via S3 — too large for direct upload)
-      console.log('[clara/aws] Publishing Chromium Lambda Layer...');
-      const chromiumLayerArn = await publishChromiumLayer(lambda, s3, res.bucketName);
-      console.log(`[clara/aws] Chromium layer: ${chromiumLayerArn}`);
-
-      // 5a. Bundle and deploy renderer
+      // 5. Bundle and deploy renderer (includes @sparticuz/chromium in the ZIP)
       console.log('[clara/aws] Bundling renderer...');
       const rendererZip = await bundleRenderer();
 
@@ -515,12 +447,12 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         { FunctionName: res.rendererFunctionArn }
       );
 
-      // 5a-ii. Attach Chromium layer and ensure adequate timeout/memory
-      console.log('[clara/aws] Configuring renderer with Chromium layer...');
+      // 5b. Ensure renderer has adequate timeout/memory and no stale layers
+      console.log('[clara/aws] Configuring renderer...');
       await lambda.send(
         new UpdateFunctionConfigurationCommand({
           FunctionName: res.rendererFunctionArn,
-          Layers: [chromiumLayerArn],
+          Layers: [], // No layers needed — chromium is bundled in the ZIP
           MemorySize: 2048,
           Timeout: 60,
         })
@@ -531,9 +463,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         { FunctionName: res.rendererFunctionArn }
       );
 
-      // 5b. Ensure renderer has full S3 permissions (read fallback + write rendered pages)
-      //     Uses IAM API directly (not UpdateStack, which would revert CloudFront config)
-      //     This covers cases where the stack was created with an older CloudFormation template
+      // 5c. Ensure renderer has full S3 permissions (read fallback + write rendered pages)
       console.log('[clara/aws] Ensuring renderer permissions...');
       try {
         const cfn = new CloudFormationClient({ region: res.region });
@@ -611,27 +541,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       try {
         const cfn = new CloudFormationClient({ region });
         const outputs = await getStackOutputs(cfn, stackName);
-        const resources = outputsToResources(stackName, region, outputs);
-
-        // Try to get the existing Chromium layer ARN from the renderer config
-        try {
-          const lambda = new LambdaClient({ region });
-          const fnConfig = await lambda.send(
-            new GetFunctionConfigurationCommand({
-              FunctionName: resources.rendererFunctionArn,
-            })
-          );
-          const chromiumLayer = fnConfig.Layers?.find((l) =>
-            l.Arn?.includes('clara-chromium')
-          );
-          if (chromiumLayer?.Arn) {
-            resources.chromiumLayerArn = chromiumLayer.Arn;
-          }
-        } catch {
-          // Layer not yet attached — will be handled during deploy
-        }
-
-        return resources;
+        return outputsToResources(stackName, region, outputs);
       } catch {
         return null;
       }
