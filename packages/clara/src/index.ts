@@ -7,6 +7,10 @@ export type {
   ClaraManifest,
   ManifestRoute,
   RouteMatch,
+  ClaraMetadata,
+  ClaraMetaDataGenerator,
+  ClaraRouteDefinition,
+  ClaraRoutes,
 } from './types.js';
 
 export { validateConfig } from './config.js';

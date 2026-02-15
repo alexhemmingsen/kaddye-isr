@@ -30,10 +30,9 @@ import {
 } from '@aws-sdk/client-cloudfront';
 import type {
   ClaraProvider,
-  ClaraPluginConfig,
+  ClaraDeployConfig,
   ProviderResources
 } from '../../types.js';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { createS3Client, syncToS3, emptyBucket } from './s3.js';
 import { buildTemplate } from './cloudformation.js';
 import { bundleEdgeHandler, bundleRenderer } from './bundle.js';
@@ -294,7 +293,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
     name: 'aws',
     config: { ...awsConfig },
 
-    async setup(_config: ClaraPluginConfig): Promise<AwsResources> {
+    async setup(_config: ClaraDeployConfig): Promise<AwsResources> {
       // BYOI: no provisioning needed — return the pre-configured resources
       if (byoi) {
         console.log('[clara/aws] Using existing infrastructure (BYOI mode)');
@@ -375,11 +374,11 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
     },
 
     async deploy(
-      config: ClaraPluginConfig,
+      config: ClaraDeployConfig,
       resources: ProviderResources,
-      buildDir: string
     ): Promise<void> {
       const res = resources as AwsResources;
+      const buildDir = config.outputDir;
 
       // 0. Generate fallback pages for dynamic routes before uploading
       console.log('[clara/aws] Generating fallback pages...');
@@ -398,7 +397,6 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         bucketName: res.bucketName,
         rendererArn: res.rendererFunctionArn,
         region: res.region,
-        distributionDomain: res.distributionDomain
       });
 
       const lambda = new LambdaClient({ region: res.region });
@@ -494,29 +492,24 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const cf = new CloudFrontClient({ region: res.region });
       await updateCloudFrontEdgeVersion(cf, res.distributionId, newVersionArn);
 
-      // 5. Bundle and deploy renderer (includes chromium binaries in the ZIP)
-      //    The ZIP is ~70MB (chromium binaries), which exceeds Lambda's 50MB
-      //    direct upload limit. Upload to S3 first, then reference it.
+      // 5. Bundle and deploy renderer
+      //    The renderer is a simple Node.js Lambda that calls the developer's
+      //    metadata generators to fetch metadata, then patches the fallback HTML.
+      //    No Chromium or Puppeteer — just S3 reads, data source calls, and S3 writes.
       console.log('[clara/aws] Bundling renderer...');
-      const rendererZip = await bundleRenderer();
+      const rendererZip = await bundleRenderer(config.routeFile);
 
-      const rendererZipKey = '_clara/renderer.zip';
-      console.log('[clara/aws] Uploading renderer ZIP to S3...');
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: res.bucketName,
-          Key: rendererZipKey,
-          Body: rendererZip,
-          ContentType: 'application/zip',
-        })
+      // Wait for renderer to be ready
+      await waitUntilFunctionUpdatedV2(
+        { client: lambda, maxWaitTime: 120 },
+        { FunctionName: res.rendererFunctionArn }
       );
 
       console.log('[clara/aws] Deploying renderer...');
       await lambda.send(
         new UpdateFunctionCodeCommand({
           FunctionName: res.rendererFunctionArn,
-          S3Bucket: res.bucketName,
-          S3Key: rendererZipKey,
+          ZipFile: rendererZip,
         })
       );
 
@@ -526,14 +519,14 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         { FunctionName: res.rendererFunctionArn }
       );
 
-      // 5b. Ensure renderer has adequate timeout/memory and no stale layers
+      // 5b. Configure renderer — 256MB is plenty (no Chromium needed)
       console.log('[clara/aws] Configuring renderer...');
       await lambda.send(
         new UpdateFunctionConfigurationCommand({
           FunctionName: res.rendererFunctionArn,
-          Layers: [], // No layers needed — chromium is bundled in the ZIP
-          MemorySize: 2048,
-          Timeout: 60,
+          Layers: [],
+          MemorySize: 256,
+          Timeout: 30,
         })
       );
 
@@ -611,7 +604,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       );
     },
 
-    async exists(_config: ClaraPluginConfig): Promise<AwsResources | null> {
+    async exists(_config: ClaraDeployConfig): Promise<AwsResources | null> {
       // BYOI: infrastructure always "exists"
       if (byoi) {
         return byoiResources(awsConfig as AwsConfig & { bucketName: string });

@@ -50,10 +50,7 @@
       "optional": true
     }
   },
-  "optionalDependencies": {
-    "@sparticuz/chromium": "^131.0.0",
-    "puppeteer-core": "^22.0.0"
-  },
+  "optionalDependencies": {},
   "devDependencies": {
     "@types/archiver": "^6.0.0",
     "@types/node": "^22.0.0",

@@ -1,7 +1,7 @@
 import type { NextConfig } from 'next';
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import type { ClaraPluginConfig, ClaraDeployConfig } from '../types.js';
+import { join, resolve } from 'node:path';
+import type { ClaraPluginConfig, ClaraDeployConfig, ClaraRoute } from '../types.js';
 import { validateConfig } from '../config.js';
 import { buildManifest } from '../routes.js';
 
@@ -40,11 +40,51 @@ function acquireLogLock(): boolean {
 }
 
 /**
+ * Extract route patterns from the route file by reading it as text.
+ *
+ * Matches `route:` property values in the exported array, e.g.:
+ *   { route: '/product/:id', metaDataGenerator: async (params) => { ... } }
+ *
+ * This avoids importing the file (which may have side effects or dependencies).
+ */
+function extractRoutesFromRouteFile(routeFilePath: string): ClaraRoute[] {
+  const absPath = resolve(routeFilePath);
+  if (!existsSync(absPath)) {
+    throw new Error(`[clara] Route file not found: ${absPath}`);
+  }
+
+  const source = readFileSync(absPath, 'utf-8');
+
+  // Match route: '/pattern' or route: "/pattern" values
+  const patterns: string[] = [];
+  const regex = /route\s*:\s*['"](\/.+?)['"]/g;
+  let match;
+  while ((match = regex.exec(source)) !== null) {
+    const pattern = match[1];
+    // Only include patterns with dynamic params (contain ':')
+    if (pattern.includes(':')) {
+      patterns.push(pattern);
+    }
+  }
+
+  if (patterns.length === 0) {
+    throw new Error(
+      `[clara] No route patterns found in ${routeFilePath}. ` +
+      `Each entry should have a route property like '/product/:id'.`
+    );
+  }
+
+  return patterns.map((pattern) => ({ pattern }));
+}
+
+/**
  * Wrap a Next.js config with Clara.
  *
  * During `next build`, this writes two files:
  * - `public/clara-manifest.json` — route patterns for the edge handler (copied to out/ by Next.js)
  * - `.clara/config.json` — deploy config for `clara deploy` to read
+ *
+ * Route patterns are extracted automatically from the route file.
  *
  * The build itself is unaffected — no deploy, no AWS calls, no side effects.
  * Run `clara deploy` separately to provision infrastructure and deploy.
@@ -55,18 +95,21 @@ function acquireLogLock(): boolean {
  * import { aws } from 'clara/aws';
  *
  * export default withClara({
- *   routes: [{ pattern: '/product/:id' }],
- *   provider: aws({ region: 'eu-west-1' }),
+ *   routeFile: './clara.routes.ts',
+ *   provider: aws(),
  * })({
  *   output: 'export',
  * });
  * ```
  */
 export function withClara(claraConfig: ClaraPluginConfig) {
-  validateConfig(claraConfig);
+  // Extract routes from the route file
+  const routes = extractRoutesFromRouteFile(claraConfig.routeFile);
+
+  validateConfig(claraConfig, routes);
 
   // Write manifest to public/ — Next.js copies public/ to out/ during static export
-  const manifest = buildManifest(claraConfig.routes);
+  const manifest = buildManifest(routes);
   mkdirSync('public', { recursive: true });
   writeFileSync(
     join('public', 'clara-manifest.json'),
@@ -74,9 +117,9 @@ export function withClara(claraConfig: ClaraPluginConfig) {
   );
 
   if (acquireLogLock()) {
+    console.log(`[clara] Found ${routes.length} route(s) in ${claraConfig.routeFile}`);
     console.log('[clara] Manifest written to public/clara-manifest.json');
-    console.log('[clara] Deploy config written to .clara/config.json');
-    console.log('[clara] Run `clara deploy` to provision and deploy.');
+    console.log('[clara] Run `clara deploy` after building to provision and deploy.');
   }
 
   return (nextConfig: NextConfig): NextConfig => {
@@ -84,12 +127,13 @@ export function withClara(claraConfig: ClaraPluginConfig) {
 
     // Write deploy config for `clara deploy`
     const deployConfig: ClaraDeployConfig = {
-      routes: claraConfig.routes,
+      routes,
       provider: {
         name: claraConfig.provider.name,
         ...claraConfig.provider.config,
       },
       outputDir,
+      routeFile: resolve(claraConfig.routeFile),
     };
 
     mkdirSync(CLARA_DIR, { recursive: true });

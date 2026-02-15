@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ClaraDeployConfig, ClaraPluginConfig, ProviderResources } from './types.js';
+import type { ClaraDeployConfig, ProviderResources } from './types.js';
 import { CLARA_DIR, RESOURCES_FILE } from './provider/aws/constants.js';
 import { aws } from './provider/aws/index.js';
 
@@ -72,19 +72,14 @@ async function deploy() {
   const config = loadConfig();
   const provider = createProvider(config.provider);
 
-  const pluginConfig: ClaraPluginConfig = {
-    routes: config.routes,
-    provider,
-  };
-
   // Always run setup — it handles both creating new stacks and updating existing ones
   console.log(`[clara] Setting up ${provider.name} infrastructure...`);
-  const resources = await provider.setup(pluginConfig);
+  const resources = await provider.setup(config);
   saveResources(resources);
 
   // Deploy
   console.log(`[clara] Deploying to ${provider.name}...`);
-  await provider.deploy(pluginConfig, resources, config.outputDir);
+  await provider.deploy(config, resources);
 }
 
 async function teardown() {

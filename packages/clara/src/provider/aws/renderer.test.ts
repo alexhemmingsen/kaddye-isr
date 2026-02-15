@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 
 // ── Inline deriveS3Key from renderer.ts for testing ──────────────
 // (Same logic — the renderer.ts file can't be imported directly because
-// it imports @sparticuz/chromium and puppeteer-core at the top level)
+// it imports the '__clara_routes__' virtual module resolved at bundle time)
 
 function deriveS3Key(uri: string): string {
   const cleanUri = uri.replace(/^\//, '').replace(/\/$/, '');

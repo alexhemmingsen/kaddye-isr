@@ -10,7 +10,6 @@
  */
 
 import { build } from 'esbuild';
-import { createRequire } from 'node:module';
 import { mkdirSync, existsSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,72 +73,10 @@ async function createZip(filePath: string, entryName: string): Promise<Buffer> {
   });
 }
 
-/**
- * Create a ZIP buffer from a file + additional directories.
- */
-async function createZipWithDirs(
-  filePath: string,
-  entryName: string,
-  dirs: Array<{ source: string; target: string }>
-): Promise<Buffer> {
-  return new Promise((resolvePromise, reject) => {
-    const chunks: Buffer[] = [];
-    const converter = new Writable({
-      write(chunk, _encoding, callback) {
-        chunks.push(chunk);
-        callback();
-      },
-    });
-
-    // Use zlib level 1 (fast) — the chromium binaries are already brotli-compressed
-    const archive = archiver('zip', { zlib: { level: 1 } });
-    archive.on('error', reject);
-    converter.on('finish', () => resolvePromise(Buffer.concat(chunks)));
-
-    archive.pipe(converter);
-    archive.file(filePath, { name: entryName });
-    for (const dir of dirs) {
-      archive.directory(dir.source, dir.target);
-    }
-    archive.finalize();
-  });
-}
-
-/**
- * Find the @sparticuz/chromium bin/ directory using Node's module resolution.
- *
- * Uses require.resolve() to locate the package entry point, then derives
- * the bin/ path relative to it. The bin/ folder contains brotli-compressed
- * chromium binaries that are too large for esbuild to bundle.
- * The JS code from @sparticuz/chromium IS bundled by esbuild.
- */
-function findChromiumBinDir(): string {
-  try {
-    // Use createRequire for ESM compatibility
-    const req = createRequire(import.meta.url);
-    // resolve() returns e.g. .../node_modules/@sparticuz/chromium/build/index.js
-    const entryPath = req.resolve('@sparticuz/chromium');
-    // bin/ is a sibling of build/ in the package root
-    const packageDir = join(entryPath, '..', '..');
-    const binDir = join(packageDir, 'bin');
-
-    if (!existsSync(binDir)) {
-      throw new Error(`bin/ directory not found at ${binDir}`);
-    }
-
-    return binDir;
-  } catch (err) {
-    throw new Error(
-      `[clara] @sparticuz/chromium bin/ directory not found. Install @sparticuz/chromium as a dependency. (${(err as Error).message})`
-    );
-  }
-}
-
 export interface EdgeHandlerConfig {
   bucketName: string;
   rendererArn: string;
   region: string;
-  distributionDomain: string;
 }
 
 /**
@@ -168,7 +105,6 @@ export async function bundleEdgeHandler(
       __CLARA_BUCKET_NAME__: JSON.stringify(config.bucketName),
       __CLARA_RENDERER_ARN__: JSON.stringify(config.rendererArn),
       __CLARA_REGION__: JSON.stringify(config.region),
-      __CLARA_DISTRIBUTION_DOMAIN__: JSON.stringify(config.distributionDomain),
     },
     // Bundle everything — Lambda@Edge must be self-contained
     external: [],
@@ -180,15 +116,33 @@ export async function bundleEdgeHandler(
 /**
  * Bundle the renderer Lambda handler into a ZIP.
  *
- * @sparticuz/chromium JS is fully bundled by esbuild (along with puppeteer-core
- * and all other dependencies). Only the chromium bin/ directory (brotli-compressed
- * binaries) is included separately in the ZIP at the root level, so it unpacks
- * to /var/task/bin/ in Lambda. The renderer calls chromium.executablePath('/var/task/bin')
- * to locate the binaries.
+ * The renderer fetches metadata from the developer's data source using
+ * metadata generators, then patches the fallback HTML with real SEO metadata.
+ * No browser or Chromium needed.
+ *
+ * The developer's route file is bundled into the renderer via esbuild's
+ * `alias` option: the renderer imports from '__clara_routes__', which
+ * esbuild resolves to the actual route file path.
+ *
+ * @param routeFile - Absolute path to the developer's route file
  */
-export async function bundleRenderer(): Promise<Buffer> {
+export async function bundleRenderer(routeFile?: string): Promise<Buffer> {
   mkdirSync(BUNDLE_DIR, { recursive: true });
   const outfile = join(BUNDLE_DIR, 'renderer.js');
+
+  // Map the virtual import '__clara_routes__' to the developer's route file.
+  // If no route file is provided, map to an empty module.
+  const alias: Record<string, string> = {};
+  if (routeFile) {
+    alias['__clara_routes__'] = resolve(routeFile);
+  } else {
+    // Create a no-op routes module inline via esbuild stdin won't work here,
+    // so we create a temporary file
+    const noopPath = join(BUNDLE_DIR, '__clara_noop_routes.js');
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(noopPath, 'module.exports = { default: [] };');
+    alias['__clara_routes__'] = resolve(noopPath);
+  }
 
   await build({
     entryPoints: [resolveEntry('renderer')],
@@ -198,20 +152,9 @@ export async function bundleRenderer(): Promise<Buffer> {
     format: 'cjs',
     outfile,
     minify: true,
-    // Bundle everything including @sparticuz/chromium JS.
-    // The bin/ directory (chromium binaries) is included separately in the ZIP.
+    alias,
     external: [],
   });
 
-  // Include only the bin/ directory from @sparticuz/chromium in the ZIP.
-  // These are the brotli-compressed chromium binaries that can't be bundled by esbuild.
-  // Placed at root level → unpacks to /var/task/bin/ in Lambda.
-  const chromiumBinDir = findChromiumBinDir();
-
-  return createZipWithDirs(outfile, 'renderer.js', [
-    {
-      source: chromiumBinDir,
-      target: 'bin',
-    },
-  ]);
+  return createZip(outfile, 'renderer.js');
 }

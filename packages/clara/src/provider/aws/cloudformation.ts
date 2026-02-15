@@ -11,7 +11,7 @@ export interface CloudFormationConfig {
  * - CloudFront distribution with OAC
  * - CloudFront Function for URL rewriting (/product/42 → /product/42.html)
  * - Lambda@Edge origin-response handler
- * - Renderer Lambda with Chromium layer
+ * - Renderer Lambda (metadata generator)
  * - IAM roles for both Lambdas
  */
 export function buildTemplate(config: CloudFormationConfig): Record<string, unknown> {
@@ -239,9 +239,8 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
           Code: {
             ZipFile: 'exports.handler = async () => ({ statusCode: 200 });',
           },
-          MemorySize: 2048,
-          Timeout: 60,
-          // distributionDomain is passed via invocation payload from the edge handler
+          MemorySize: 256,
+          Timeout: 30,
         },
       },
 

@@ -7,28 +7,33 @@
  * The renderer:
  * 1. Reads the route's _fallback.html from S3
  * 2. Patches the __CLARA_FALLBACK__ placeholder with the actual param value
- * 3. Uses Puppeteer request interception to serve this HTML as the document
- *    (sub-resources like JS/CSS are loaded normally from CloudFront)
- * 4. Waits for client-side rendering to complete (data fetching + React hydration)
- * 5. Extracts SEO metadata from the rendered DOM (title, description, og tags)
- * 6. Patches the HTML <head> with the correct metadata
- * 7. Uploads the final SEO-complete HTML to S3 for future requests
+ * 3. Calls the developer's metaDataGenerator to fetch metadata from the data source
+ * 4. Patches <title>, <meta> tags, and RSC flight data with real metadata
+ * 5. Uploads the final SEO-complete HTML to S3 for future requests
  *
- * @sparticuz/chromium JS is bundled by esbuild; its bin/ folder (chromium binary)
- * is included separately in the ZIP at the root level.
+ * The route file is bundled by esbuild at deploy time. It exports an array of
+ * route definitions, each with a pattern and a metaDataGenerator function.
  */
 
-import chromium from '@sparticuz/chromium';
-import puppeteer from 'puppeteer-core';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import type { ClaraMetadata } from '../../types.js';
+
+// The routes module is resolved by esbuild at deploy time.
+// esbuild's `alias` option maps this import to the developer's route file.
+// At bundle time: '__clara_routes__' → './clara.routes.ts' (or wherever the dev put it)
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — resolved at bundle time by esbuild alias
+import routes from '__clara_routes__';
 
 interface RendererEvent {
   /** The request URI, e.g. '/product/42' */
   uri: string;
   /** S3 bucket name to upload the rendered HTML to */
   bucket: string;
-  /** CloudFront distribution domain for loading sub-resources (JS, CSS) */
-  distributionDomain: string;
+  /** The route pattern that matched, e.g. '/product/:id' */
+  routePattern: string;
+  /** The extracted route params, e.g. { id: '42' } */
+  params: Record<string, string>;
 }
 
 interface RendererResult {
@@ -68,19 +73,78 @@ function extractParamValue(uri: string): string {
   return cleanUri.split('/').pop() || '';
 }
 
+/**
+ * Patch the HTML with real metadata from the metaDataGenerator.
+ * This produces output identical to what Next.js generates at build time.
+ */
+function patchMetadata(html: string, metadata: ClaraMetadata): string {
+  let patched = html;
+
+  const title = metadata.title;
+  const description = metadata.description || '';
+  const ogTitle = metadata.openGraph?.title || title;
+  const ogDescription = metadata.openGraph?.description || description;
+
+  // 1. Update <title> tag
+  patched = patched.replace(
+    /<title>[^<]*<\/title>/,
+    `<title>${escapeHtml(title)}</title>`
+  );
+
+  // 2. Remove existing SEO meta tags (React may have removed empty ones during hydration,
+  //    but the fallback template still has them)
+  patched = patched.replace(/<meta name="description" content="[^"]*"\s*\/?>/g, '');
+  patched = patched.replace(/<meta property="og:title" content="[^"]*"\s*\/?>/g, '');
+  patched = patched.replace(/<meta property="og:description" content="[^"]*"\s*\/?>/g, '');
+  patched = patched.replace(/<meta name="twitter:card" content="[^"]*"\s*\/?>/g, '');
+  patched = patched.replace(/<meta name="twitter:title" content="[^"]*"\s*\/?>/g, '');
+  patched = patched.replace(/<meta name="twitter:description" content="[^"]*"\s*\/?>/g, '');
+
+  // 3. Inject meta tags after </title> — matches build-time output format
+  const metaTags = [
+    description ? `<meta name="description" content="${escapeAttr(description)}"/>` : '',
+    `<meta property="og:title" content="${escapeAttr(ogTitle)}"/>`,
+    ogDescription ? `<meta property="og:description" content="${escapeAttr(ogDescription)}"/>` : '',
+    `<meta name="twitter:card" content="summary"/>`,
+    `<meta name="twitter:title" content="${escapeAttr(title)}"/>`,
+    description ? `<meta name="twitter:description" content="${escapeAttr(description)}"/>` : '',
+  ].filter(Boolean).join('');
+
+  patched = patched.replace(
+    /(<\/title>)/,
+    `$1${metaTags}`
+  );
+
+  // 4. Patch RSC flight data so React doesn't overwrite metadata on hydration.
+  //    RSC data lives inside <script>self.__next_f.push([1,"..."])</script>
+  //    where quotes are escaped as \". We must match and replace in that form.
+  //    Build-time format:
+  //    8:{"metadata":[[...title...],[...meta tags...]],\"error\":null,\"digest\":\"$undefined\"}
+  const q = '\\"'; // escaped quote as it appears in the HTML script
+
+  const metadataEntries = [
+    `[${q}$${q},${q}title${q},${q}0${q},{${q}children${q}:${q}${escapeRsc(title)}${q}}]`,
+    description ? `,[${q}$${q},${q}meta${q},${q}1${q},{${q}name${q}:${q}description${q},${q}content${q}:${q}${escapeRsc(description)}${q}}]` : '',
+    `,[${q}$${q},${q}meta${q},${q}2${q},{${q}property${q}:${q}og:title${q},${q}content${q}:${q}${escapeRsc(ogTitle)}${q}}]`,
+    ogDescription ? `,[${q}$${q},${q}meta${q},${q}3${q},{${q}property${q}:${q}og:description${q},${q}content${q}:${q}${escapeRsc(ogDescription)}${q}}]` : '',
+    `,[${q}$${q},${q}meta${q},${q}4${q},{${q}name${q}:${q}twitter:card${q},${q}content${q}:${q}summary${q}}]`,
+    `,[${q}$${q},${q}meta${q},${q}5${q},{${q}name${q}:${q}twitter:title${q},${q}content${q}:${q}${escapeRsc(title)}${q}}]`,
+    description ? `,[${q}$${q},${q}meta${q},${q}6${q},{${q}name${q}:${q}twitter:description${q},${q}content${q}:${q}${escapeRsc(description)}${q}}]` : '',
+  ].filter(Boolean).join('');
+
+  patched = patched.replace(
+    /8:\{\\\"metadata\\\":\[[\s\S]*?\],\\\"error\\\":null,\\\"digest\\\":\\\"?\$undefined\\\"?\}/,
+    `8:{\\\"metadata\\\":[${metadataEntries}],\\\"error\\\":null,\\\"digest\\\":\\\"$undefined\\\"}`
+  );
+
+  return patched;
+}
+
 export async function handler(event: RendererEvent): Promise<RendererResult> {
-  const { uri, bucket, distributionDomain } = event;
+  const { uri, bucket, routePattern, params } = event;
   const region = process.env.AWS_REGION || 'us-east-1';
 
-  if (!distributionDomain) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: 'distributionDomain not provided in event' }),
-    };
-  }
-
   const s3 = new S3Client({ region });
-  let browser;
 
   try {
     // 1. Read the fallback HTML from S3
@@ -107,110 +171,23 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
 
     // 2. Patch the fallback with the actual param value
     const paramValue = extractParamValue(uri);
-    const patchedHtml = fallbackHtml.replace(
+    let html = fallbackHtml.replace(
       new RegExp(FALLBACK_PLACEHOLDER, 'g'),
       paramValue
     );
 
-    // 3. Launch headless Chrome
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath('/var/task/bin'),
-      headless: chromium.headless,
-    });
+    // 3. Call the metaDataGenerator to fetch metadata from the data source
+    const routeDef = routes?.find((r: { route: string }) => r.route === routePattern);
 
-    const page = await browser.newPage();
-
-    // 4. Use request interception to serve the patched fallback as the document
-    //    All sub-resources (JS, CSS, fonts) load normally from CloudFront
-    await page.setRequestInterception(true);
-
-    let documentIntercepted = false;
-    page.on('request', (request) => {
-      if (request.resourceType() === 'document' && !documentIntercepted) {
-        documentIntercepted = true;
-        request.respond({
-          status: 200,
-          contentType: 'text/html; charset=utf-8',
-          body: patchedHtml,
-        });
-      } else {
-        request.continue();
+    if (routeDef?.metaDataGenerator) {
+      const metadata = await routeDef.metaDataGenerator(params);
+      if (metadata) {
+        // 4. Patch the HTML with real metadata
+        html = patchMetadata(html, metadata);
       }
-    });
-
-    // Navigate to the CloudFront URL — the document request is intercepted,
-    // but JS/CSS requests go through to CloudFront normally
-    const url = `https://${distributionDomain}${uri}`;
-    await page.goto(url, {
-      waitUntil: 'networkidle0',
-      timeout: 30000,
-    });
-
-    // 5. Wait a bit for any final renders, then capture the HTML
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // 6. Extract SEO metadata from the rendered DOM
-    //    The callback runs in the browser context (Puppeteer), not Node.js
-    const seoData = await page.evaluate(() => {
-      /* eslint-disable no-undef */
-      return {
-        title: (globalThis as any).document.title || '',
-        h1: (globalThis as any).document.querySelector('h1')?.textContent || '',
-        description:
-          (globalThis as any).document
-            .querySelector('meta[name="description"]')
-            ?.getAttribute('content') || '',
-      };
-    });
-
-    // 7. Get the full rendered HTML
-    let html = await page.content();
-
-    // 8. Patch the <head> with proper SEO metadata from the rendered content
-    //    The client component should set document.title after fetching data.
-    //    We also generate og: tags from the rendered content.
-    if (seoData.title && seoData.title !== 'Loading...') {
-      // Title was set by the client component — use it
-      html = html.replace(
-        /<title>[^<]*<\/title>/,
-        `<title>${escapeHtml(seoData.title)}</title>`
-      );
-    } else if (seoData.h1) {
-      // Fallback: use the h1 content as the title
-      html = html.replace(
-        /<title>[^<]*<\/title>/,
-        `<title>${escapeHtml(seoData.h1)}</title>`
-      );
     }
 
-    // Update meta tags with rendered content
-    const description = seoData.description || seoData.h1 || '';
-    if (description) {
-      html = html.replace(
-        /<meta name="description" content="[^"]*"\/>/,
-        `<meta name="description" content="${escapeAttr(description)}"/>`
-      );
-      html = html.replace(
-        /<meta property="og:title" content="[^"]*"\/>/,
-        `<meta property="og:title" content="${escapeAttr(seoData.title || seoData.h1)}"/>`
-      );
-      html = html.replace(
-        /<meta property="og:description" content="[^"]*"\/>/,
-        `<meta property="og:description" content="${escapeAttr(description)}"/>`
-      );
-      html = html.replace(
-        /<meta name="twitter:title" content="[^"]*"\/>/,
-        `<meta name="twitter:title" content="${escapeAttr(seoData.title || seoData.h1)}"/>`
-      );
-      html = html.replace(
-        /<meta name="twitter:description" content="[^"]*"\/>/,
-        `<meta name="twitter:description" content="${escapeAttr(description)}"/>`
-      );
-    }
-
-    // 9. Upload to S3
+    // 5. Upload to S3
     const s3Key = deriveS3Key(uri);
 
     await s3.send(
@@ -229,7 +206,6 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
       body: JSON.stringify({
         message: `Rendered and cached: ${uri}`,
         key: s3Key,
-        title: seoData.title,
       }),
     };
   } catch (err) {
@@ -239,10 +215,6 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
         error: `Render failed for ${uri}: ${(err as Error).message}`,
       }),
     };
-  } finally {
-    if (browser) {
-      await browser.close();
-    }
   }
 }
 
@@ -259,4 +231,10 @@ function escapeAttr(str: string): string {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function escapeRsc(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
 }

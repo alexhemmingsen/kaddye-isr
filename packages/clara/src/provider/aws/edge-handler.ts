@@ -25,8 +25,6 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 declare const __CLARA_BUCKET_NAME__: string;
 declare const __CLARA_RENDERER_ARN__: string;
 declare const __CLARA_REGION__: string;
-declare const __CLARA_DISTRIBUTION_DOMAIN__: string;
-
 // ── Types (inlined to keep bundle self-contained) ────────────────
 
 interface ManifestRoute {
@@ -193,10 +191,10 @@ const lambda = new LambdaClient({ region: __CLARA_REGION__ });
 
 /**
  * Invoke the renderer Lambda asynchronously (fire-and-forget).
- * The renderer will use Puppeteer to render the page with full client-side content,
- * capture the HTML with SEO metadata, and upload it to S3.
+ * The renderer uses the developer's metadata generators to fetch metadata from
+ * the data source, then patches the fallback HTML with real SEO metadata.
  */
-function invokeRendererAsync(uri: string): void {
+function invokeRendererAsync(uri: string, match: RouteMatch): void {
   // Fire-and-forget — don't await the result
   lambda
     .send(
@@ -206,7 +204,8 @@ function invokeRendererAsync(uri: string): void {
         Payload: JSON.stringify({
           uri,
           bucket: __CLARA_BUCKET_NAME__,
-          distributionDomain: __CLARA_DISTRIBUTION_DOMAIN__,
+          routePattern: match.route.pattern,
+          params: match.params,
         }),
       })
     )
@@ -280,8 +279,8 @@ export async function handler(
       // Patch the placeholder with actual param values
       const patchedHtml = patchFallback(fallbackHtml, match.params);
 
-      // Fire off the renderer asynchronously — it will build the real page with SEO
-      invokeRendererAsync(cleanUri);
+      // Fire off the renderer asynchronously — it will fetch metadata and build the page
+      invokeRendererAsync(cleanUri, match);
 
       return buildHtmlResponse(patchedHtml, response);
     }

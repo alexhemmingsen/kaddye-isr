@@ -2,7 +2,7 @@ import { withClara } from 'clara/next';
 import { aws } from 'clara/aws';
 
 export default withClara({
-  routes: [{ pattern: '/product/:id' }],
+  routeFile: './clara.routes.ts',
   provider: aws()
 })({
   output: 'export'

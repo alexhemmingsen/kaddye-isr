@@ -23,8 +23,6 @@ export default defineConfig([
       '@aws-sdk/client-iam',
       'esbuild',
       'archiver',
-      'puppeteer-core',
-      '@sparticuz/chromium',
     ],
   },
   // CLI binary (ESM only, no declarations)
@@ -43,8 +41,6 @@ export default defineConfig([
       '@aws-sdk/client-iam',
       'esbuild',
       'archiver',
-      'puppeteer-core',
-      '@sparticuz/chromium',
     ],
   },
 ]);
