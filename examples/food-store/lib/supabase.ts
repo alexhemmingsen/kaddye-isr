@@ -11,6 +11,7 @@ export interface Product {
   name: string;
   description: string;
   price: number;
+  image_url: string;
 }
 
 export async function getProducts(): Promise<Product[]> {

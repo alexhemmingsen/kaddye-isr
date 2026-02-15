@@ -10,7 +10,7 @@ export async function generateStaticParams() {
 }
 
 export async function generateMetadata({
-  params,
+  params
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
@@ -27,12 +27,13 @@ export async function generateMetadata({
     openGraph: {
       title: product.name,
       description: product.description,
-    },
+      images: [{ url: product.image_url, alt: product.name }]
+    }
   };
 }
 
 export default async function ProductPage({
-  params,
+  params
 }: {
   params: Promise<{ id: string }>;
 }) {

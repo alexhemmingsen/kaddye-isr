@@ -14,6 +14,7 @@ const routes: ClaraRoutes = [
         openGraph: {
           title: product.name,
           description: product.description,
+          images: [{ url: product.image_url, alt: product.name }],
         },
       };
     },

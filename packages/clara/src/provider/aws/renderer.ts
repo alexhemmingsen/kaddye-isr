@@ -16,7 +16,38 @@
  */
 
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import type { ClaraMetadata } from '../../types.js';
+import type {
+  ClaraMetadata,
+  ClaraOpenGraph,
+  ClaraOpenGraphBase,
+  ClaraOGImage,
+  ClaraOGImageDescriptor,
+  ClaraOGAudio,
+  ClaraOGAudioDescriptor,
+  ClaraOGVideo,
+  ClaraOGVideoDescriptor,
+  ClaraTwitter,
+  ClaraTwitterImage,
+  ClaraTwitterImageDescriptor,
+  ClaraRobots,
+  ClaraRobotsInfo,
+  ClaraAlternateURLs,
+  ClaraAlternateLinkDescriptor,
+  ClaraIcons,
+  ClaraIcon,
+  ClaraIconDescriptor,
+  ClaraVerification,
+  ClaraAppleWebApp,
+  ClaraFormatDetection,
+  ClaraFacebook,
+  ClaraPinterest,
+  ClaraAppLinks,
+  ClaraAppLinksApple,
+  ClaraAppLinksAndroid,
+  ClaraAppLinksWindows,
+  ClaraAppLinksWeb,
+  ClaraAuthor,
+} from '../../types.js';
 
 // The routes module is resolved by esbuild at deploy time.
 // esbuild's `alias` option maps this import to the developer's route file.
@@ -75,46 +106,477 @@ function extractParamValue(uri: string): string {
   return cleanUri.split('/').pop() || '';
 }
 
+// ── Helpers: normalize single-or-array values ────────────────────
+
+function toArray<T>(val: T | T[] | undefined): T[] {
+  if (val === undefined || val === null) return [];
+  return Array.isArray(val) ? val : [val];
+}
+
+function toStringArray(val: string | string[] | undefined): string[] {
+  if (val === undefined || val === null) return [];
+  return Array.isArray(val) ? val : [val];
+}
+
+// ── Robots string builder ────────────────────────────────────────
+
+function robotsInfoToString(info: ClaraRobotsInfo): string {
+  const parts: string[] = [];
+  if (info.index === true) parts.push('index');
+  if (info.index === false) parts.push('noindex');
+  if (info.follow === true) parts.push('follow');
+  if (info.follow === false) parts.push('nofollow');
+  if (info.noarchive) parts.push('noarchive');
+  if (info.nosnippet) parts.push('nosnippet');
+  if (info.noimageindex) parts.push('noimageindex');
+  if (info.nocache) parts.push('nocache');
+  if (info.notranslate) parts.push('notranslate');
+  if (info.indexifembedded) parts.push('indexifembedded');
+  if (info.nositelinkssearchbox) parts.push('nositelinkssearchbox');
+  if (info.unavailable_after) parts.push(`unavailable_after:${info.unavailable_after}`);
+  if (info['max-video-preview'] !== undefined) parts.push(`max-video-preview:${info['max-video-preview']}`);
+  if (info['max-image-preview']) parts.push(`max-image-preview:${info['max-image-preview']}`);
+  if (info['max-snippet'] !== undefined) parts.push(`max-snippet:${info['max-snippet']}`);
+  return parts.join(', ');
+}
+
+// ── metadataToHtml: convert ClaraMetadata → HTML tag strings ─────
+
+function metadataToHtml(metadata: ClaraMetadata): string[] {
+  const tags: string[] = [];
+
+  const meta = (name: string, content: string) =>
+    `<meta name="${escapeAttr(name)}" content="${escapeAttr(content)}"/>`;
+  const prop = (property: string, content: string) =>
+    `<meta property="${escapeAttr(property)}" content="${escapeAttr(content)}"/>`;
+  const link = (rel: string, href: string, attrs?: Record<string, string>) => {
+    const extra = attrs
+      ? Object.entries(attrs).map(([k, v]) => ` ${k}="${escapeAttr(v)}"`).join('')
+      : '';
+    return `<link rel="${escapeAttr(rel)}" href="${escapeAttr(href)}"${extra}/>`;
+  };
+
+  // Basic meta tags
+  if (metadata.description) tags.push(meta('description', metadata.description));
+  if (metadata.applicationName) tags.push(meta('application-name', metadata.applicationName));
+  if (metadata.generator) tags.push(meta('generator', metadata.generator));
+  if (metadata.creator) tags.push(meta('creator', metadata.creator));
+  if (metadata.publisher) tags.push(meta('publisher', metadata.publisher));
+  if (metadata.category) tags.push(meta('category', metadata.category));
+  if (metadata.classification) tags.push(meta('classification', metadata.classification));
+  if (metadata.abstract) tags.push(meta('abstract', metadata.abstract));
+  if (metadata.referrer) tags.push(meta('referrer', metadata.referrer));
+
+  // Keywords
+  const keywords = toStringArray(metadata.keywords);
+  if (keywords.length > 0) tags.push(meta('keywords', keywords.join(', ')));
+
+  // Authors
+  for (const author of toArray(metadata.authors)) {
+    if (author.name) tags.push(meta('author', author.name));
+    if (author.url) tags.push(link('author', author.url));
+  }
+
+  // Robots
+  if (metadata.robots) {
+    if (typeof metadata.robots === 'string') {
+      tags.push(meta('robots', metadata.robots));
+    } else {
+      const robotsStr = robotsInfoToString(metadata.robots);
+      if (robotsStr) tags.push(meta('robots', robotsStr));
+      if (metadata.robots.googleBot) {
+        if (typeof metadata.robots.googleBot === 'string') {
+          tags.push(meta('googlebot', metadata.robots.googleBot));
+        } else {
+          const gbStr = robotsInfoToString(metadata.robots.googleBot);
+          if (gbStr) tags.push(meta('googlebot', gbStr));
+        }
+      }
+    }
+  }
+
+  // Alternates
+  if (metadata.alternates) {
+    const alt = metadata.alternates;
+    if (alt.canonical) {
+      const canonical = typeof alt.canonical === 'string' ? alt.canonical : alt.canonical.url;
+      tags.push(link('canonical', canonical));
+    }
+    if (alt.languages) {
+      for (const [hreflang, urls] of Object.entries(alt.languages)) {
+        if (typeof urls === 'string') {
+          tags.push(link('alternate', urls, { hreflang }));
+        } else {
+          for (const u of toArray(urls)) {
+            tags.push(link('alternate', u.url, { hreflang }));
+          }
+        }
+      }
+    }
+    if (alt.media) {
+      for (const [mediaQuery, urls] of Object.entries(alt.media)) {
+        if (typeof urls === 'string') {
+          tags.push(link('alternate', urls, { media: mediaQuery }));
+        } else {
+          for (const u of toArray(urls)) {
+            tags.push(link('alternate', u.url, { media: mediaQuery }));
+          }
+        }
+      }
+    }
+    if (alt.types) {
+      for (const [mimeType, urls] of Object.entries(alt.types)) {
+        if (typeof urls === 'string') {
+          tags.push(link('alternate', urls, { type: mimeType }));
+        } else {
+          for (const u of toArray(urls)) {
+            tags.push(link('alternate', u.url, { type: mimeType }));
+          }
+        }
+      }
+    }
+  }
+
+  // Icons
+  if (metadata.icons) {
+    let icons: ClaraIcons;
+    if (typeof metadata.icons === 'string') {
+      icons = { icon: [metadata.icons] };
+    } else if (Array.isArray(metadata.icons)) {
+      icons = { icon: metadata.icons };
+    } else {
+      icons = metadata.icons;
+    }
+
+    const emitIcon = (icon: ClaraIcon, defaultRel: string) => {
+      if (typeof icon === 'string') {
+        tags.push(link(defaultRel, icon));
+      } else {
+        const attrs: Record<string, string> = {};
+        if (icon.type) attrs.type = icon.type;
+        if (icon.sizes) attrs.sizes = icon.sizes;
+        if (icon.color) attrs.color = icon.color;
+        if (icon.media) attrs.media = icon.media;
+        tags.push(link(icon.rel || defaultRel, icon.url, attrs));
+      }
+    };
+
+    for (const icon of toArray(icons.icon)) emitIcon(icon, 'icon');
+    for (const icon of toArray(icons.shortcut)) emitIcon(icon, 'shortcut icon');
+    for (const icon of toArray(icons.apple)) emitIcon(icon, 'apple-touch-icon');
+    for (const icon of toArray(icons.other)) emitIcon(icon, 'icon');
+  }
+
+  // Manifest
+  if (metadata.manifest) tags.push(link('manifest', metadata.manifest));
+
+  // Open Graph
+  if (metadata.openGraph) {
+    const og = metadata.openGraph;
+    if (og.title) tags.push(prop('og:title', og.title));
+    if (og.description) tags.push(prop('og:description', og.description));
+    if (og.url) tags.push(prop('og:url', og.url));
+    if (og.siteName) tags.push(prop('og:site_name', og.siteName));
+    if (og.locale) tags.push(prop('og:locale', og.locale));
+    if (og.type) tags.push(prop('og:type', og.type));
+    if (og.determiner) tags.push(prop('og:determiner', og.determiner));
+    if (og.countryName) tags.push(prop('og:country-name', og.countryName));
+    if (og.ttl !== undefined) tags.push(prop('og:ttl', String(og.ttl)));
+
+    for (const locale of toStringArray(og.alternateLocale)) {
+      tags.push(prop('og:locale:alternate', locale));
+    }
+    for (const email of toStringArray(og.emails)) {
+      tags.push(prop('og:email', email));
+    }
+    for (const phone of toStringArray(og.phoneNumbers)) {
+      tags.push(prop('og:phone_number', phone));
+    }
+    for (const fax of toStringArray(og.faxNumbers)) {
+      tags.push(prop('og:fax_number', fax));
+    }
+
+    // OG images
+    for (const img of toArray(og.images)) {
+      if (typeof img === 'string') {
+        tags.push(prop('og:image', img));
+      } else {
+        tags.push(prop('og:image', img.url));
+        if (img.secureUrl) tags.push(prop('og:image:secure_url', img.secureUrl));
+        if (img.alt) tags.push(prop('og:image:alt', img.alt));
+        if (img.type) tags.push(prop('og:image:type', img.type));
+        if (img.width !== undefined) tags.push(prop('og:image:width', String(img.width)));
+        if (img.height !== undefined) tags.push(prop('og:image:height', String(img.height)));
+      }
+    }
+
+    // OG audio
+    for (const audio of toArray(og.audio)) {
+      if (typeof audio === 'string') {
+        tags.push(prop('og:audio', audio));
+      } else {
+        tags.push(prop('og:audio', audio.url));
+        if (audio.secureUrl) tags.push(prop('og:audio:secure_url', audio.secureUrl));
+        if (audio.type) tags.push(prop('og:audio:type', audio.type));
+      }
+    }
+
+    // OG videos
+    for (const video of toArray(og.videos)) {
+      if (typeof video === 'string') {
+        tags.push(prop('og:video', video));
+      } else {
+        tags.push(prop('og:video', video.url));
+        if (video.secureUrl) tags.push(prop('og:video:secure_url', video.secureUrl));
+        if (video.type) tags.push(prop('og:video:type', video.type));
+        if (video.width !== undefined) tags.push(prop('og:video:width', String(video.width)));
+        if (video.height !== undefined) tags.push(prop('og:video:height', String(video.height)));
+      }
+    }
+
+    // OG type-specific fields
+    if (og.type === 'article') {
+      if (og.publishedTime) tags.push(prop('article:published_time', og.publishedTime));
+      if (og.modifiedTime) tags.push(prop('article:modified_time', og.modifiedTime));
+      if (og.expirationTime) tags.push(prop('article:expiration_time', og.expirationTime));
+      if (og.section) tags.push(prop('article:section', og.section));
+      for (const author of toStringArray(og.authors)) tags.push(prop('article:author', author));
+      for (const tag of toStringArray(og.tags)) tags.push(prop('article:tag', tag));
+    } else if (og.type === 'book') {
+      if (og.isbn) tags.push(prop('book:isbn', og.isbn));
+      if (og.releaseDate) tags.push(prop('book:release_date', og.releaseDate));
+      for (const author of toStringArray(og.authors)) tags.push(prop('book:author', author));
+      for (const tag of toStringArray(og.tags)) tags.push(prop('book:tag', tag));
+    } else if (og.type === 'profile') {
+      if (og.firstName) tags.push(prop('profile:first_name', og.firstName));
+      if (og.lastName) tags.push(prop('profile:last_name', og.lastName));
+      if (og.username) tags.push(prop('profile:username', og.username));
+      if (og.gender) tags.push(prop('profile:gender', og.gender));
+    } else if (og.type === 'music.song') {
+      if (og.duration !== undefined) tags.push(prop('music:duration', String(og.duration)));
+      for (const album of toStringArray(og.albums)) tags.push(prop('music:album', album));
+      for (const musician of toStringArray(og.musicians)) tags.push(prop('music:musician', musician));
+    } else if (og.type === 'music.album') {
+      if (og.releaseDate) tags.push(prop('music:release_date', og.releaseDate));
+      for (const song of toStringArray(og.songs)) tags.push(prop('music:song', song));
+      for (const musician of toStringArray(og.musicians)) tags.push(prop('music:musician', musician));
+    } else if (og.type === 'music.playlist') {
+      for (const song of toStringArray(og.songs)) tags.push(prop('music:song', song));
+      for (const creator of toStringArray(og.creators)) tags.push(prop('music:creator', creator));
+    } else if (og.type === 'music.radio_station') {
+      for (const creator of toStringArray(og.creators)) tags.push(prop('music:creator', creator));
+    } else if (og.type === 'video.movie' || og.type === 'video.episode') {
+      if (og.duration !== undefined) tags.push(prop('video:duration', String(og.duration)));
+      if (og.releaseDate) tags.push(prop('video:release_date', og.releaseDate));
+      for (const actor of toStringArray(og.actors)) tags.push(prop('video:actor', actor));
+      for (const director of toStringArray(og.directors)) tags.push(prop('video:director', director));
+      for (const writer of toStringArray(og.writers)) tags.push(prop('video:writer', writer));
+      for (const tag of toStringArray(og.tags)) tags.push(prop('video:tag', tag));
+      if (og.type === 'video.episode' && og.series) tags.push(prop('video:series', og.series));
+    }
+  }
+
+  // Twitter
+  if (metadata.twitter) {
+    const tw = metadata.twitter;
+    const card = ('card' in tw && tw.card) ? tw.card : 'summary';
+    tags.push(meta('twitter:card', card));
+    if (tw.site) tags.push(meta('twitter:site', tw.site));
+    if (tw.siteId) tags.push(meta('twitter:site:id', tw.siteId));
+    if (tw.creator) tags.push(meta('twitter:creator', tw.creator));
+    if (tw.creatorId) tags.push(meta('twitter:creator:id', tw.creatorId));
+    if (tw.title) tags.push(meta('twitter:title', tw.title));
+    if (tw.description) tags.push(meta('twitter:description', tw.description));
+
+    for (const img of toArray(tw.images)) {
+      if (typeof img === 'string') {
+        tags.push(meta('twitter:image', img));
+      } else {
+        tags.push(meta('twitter:image', img.url));
+        if (img.alt) tags.push(meta('twitter:image:alt', img.alt));
+      }
+    }
+
+    if ('players' in tw && tw.players) {
+      for (const player of toArray(tw.players)) {
+        tags.push(meta('twitter:player', player.playerUrl));
+        tags.push(meta('twitter:player:stream', player.streamUrl));
+        tags.push(meta('twitter:player:width', String(player.width)));
+        tags.push(meta('twitter:player:height', String(player.height)));
+      }
+    }
+
+    if ('app' in tw && tw.app) {
+      if (tw.app.name) tags.push(meta('twitter:app:name:iphone', tw.app.name));
+      if (tw.app.id.iphone) tags.push(meta('twitter:app:id:iphone', String(tw.app.id.iphone)));
+      if (tw.app.id.ipad) tags.push(meta('twitter:app:id:ipad', String(tw.app.id.ipad)));
+      if (tw.app.id.googleplay) tags.push(meta('twitter:app:id:googleplay', tw.app.id.googleplay));
+      if (tw.app.url?.iphone) tags.push(meta('twitter:app:url:iphone', tw.app.url.iphone));
+      if (tw.app.url?.ipad) tags.push(meta('twitter:app:url:ipad', tw.app.url.ipad));
+      if (tw.app.url?.googleplay) tags.push(meta('twitter:app:url:googleplay', tw.app.url.googleplay));
+    }
+  }
+
+  // Verification
+  if (metadata.verification) {
+    const v = metadata.verification;
+    for (const val of toStringArray(v.google)) tags.push(meta('google-site-verification', val));
+    for (const val of toStringArray(v.yahoo)) tags.push(meta('y_key', val));
+    for (const val of toStringArray(v.yandex)) tags.push(meta('yandex-verification', val));
+    for (const val of toStringArray(v.me)) tags.push(meta('me', val));
+    if (v.other) {
+      for (const [name, values] of Object.entries(v.other)) {
+        for (const val of toStringArray(values as string | string[])) {
+          tags.push(meta(name, val));
+        }
+      }
+    }
+  }
+
+  // Apple Web App
+  if (metadata.appleWebApp !== undefined) {
+    if (metadata.appleWebApp === true) {
+      tags.push(meta('apple-mobile-web-app-capable', 'yes'));
+    } else if (typeof metadata.appleWebApp === 'object') {
+      const awa = metadata.appleWebApp;
+      if (awa.capable) tags.push(meta('apple-mobile-web-app-capable', 'yes'));
+      if (awa.title) tags.push(meta('apple-mobile-web-app-title', awa.title));
+      if (awa.statusBarStyle) tags.push(meta('apple-mobile-web-app-status-bar-style', awa.statusBarStyle));
+      for (const img of toArray(awa.startupImage)) {
+        if (typeof img === 'string') {
+          tags.push(link('apple-touch-startup-image', img));
+        } else {
+          const attrs: Record<string, string> = {};
+          if (img.media) attrs.media = img.media;
+          tags.push(link('apple-touch-startup-image', img.url, attrs));
+        }
+      }
+    }
+  }
+
+  // Format detection
+  if (metadata.formatDetection) {
+    const fd = metadata.formatDetection;
+    const parts: string[] = [];
+    if (fd.telephone === false) parts.push('telephone=no');
+    if (fd.date === false) parts.push('date=no');
+    if (fd.address === false) parts.push('address=no');
+    if (fd.email === false) parts.push('email=no');
+    if (fd.url === false) parts.push('url=no');
+    if (parts.length > 0) tags.push(meta('format-detection', parts.join(', ')));
+  }
+
+  // iTunes
+  if (metadata.itunes) {
+    const parts = [`app-id=${metadata.itunes.appId}`];
+    if (metadata.itunes.appArgument) parts.push(`app-argument=${metadata.itunes.appArgument}`);
+    tags.push(meta('apple-itunes-app', parts.join(', ')));
+  }
+
+  // Facebook
+  if (metadata.facebook) {
+    if (metadata.facebook.appId) tags.push(prop('fb:app_id', metadata.facebook.appId));
+    for (const admin of toStringArray(metadata.facebook.admins)) {
+      tags.push(prop('fb:admins', admin));
+    }
+  }
+
+  // Pinterest
+  if (metadata.pinterest?.richPin !== undefined) {
+    tags.push(meta('pinterest-rich-pin', String(metadata.pinterest.richPin)));
+  }
+
+  // App Links
+  if (metadata.appLinks) {
+    const al = metadata.appLinks;
+    const emitApple = (platform: string, items: ClaraAppLinksApple[]) => {
+      for (const item of items) {
+        tags.push(prop(`al:${platform}:url`, item.url));
+        if (item.app_store_id) tags.push(prop(`al:${platform}:app_store_id`, String(item.app_store_id)));
+        if (item.app_name) tags.push(prop(`al:${platform}:app_name`, item.app_name));
+      }
+    };
+    const emitAndroid = (items: ClaraAppLinksAndroid[]) => {
+      for (const item of items) {
+        tags.push(prop('al:android:package', item.package));
+        if (item.url) tags.push(prop('al:android:url', item.url));
+        if (item.class) tags.push(prop('al:android:class', item.class));
+        if (item.app_name) tags.push(prop('al:android:app_name', item.app_name));
+      }
+    };
+    const emitWindows = (platform: string, items: ClaraAppLinksWindows[]) => {
+      for (const item of items) {
+        tags.push(prop(`al:${platform}:url`, item.url));
+        if (item.app_id) tags.push(prop(`al:${platform}:app_id`, item.app_id));
+        if (item.app_name) tags.push(prop(`al:${platform}:app_name`, item.app_name));
+      }
+    };
+    const emitWeb = (items: ClaraAppLinksWeb[]) => {
+      for (const item of items) {
+        tags.push(prop('al:web:url', item.url));
+        if (item.should_fallback !== undefined) {
+          tags.push(prop('al:web:should_fallback', String(item.should_fallback)));
+        }
+      }
+    };
+
+    emitApple('ios', toArray(al.ios));
+    emitApple('iphone', toArray(al.iphone));
+    emitApple('ipad', toArray(al.ipad));
+    emitAndroid(toArray(al.android));
+    emitWindows('windows_phone', toArray(al.windows_phone));
+    emitWindows('windows', toArray(al.windows));
+    emitWindows('windows_universal', toArray(al.windows_universal));
+    emitWeb(toArray(al.web));
+  }
+
+  // Link tags: archives, assets, bookmarks
+  for (const href of toStringArray(metadata.archives)) tags.push(link('archives', href));
+  for (const href of toStringArray(metadata.assets)) tags.push(link('assets', href));
+  for (const href of toStringArray(metadata.bookmarks)) tags.push(link('bookmarks', href));
+
+  // Pagination
+  if (metadata.pagination?.previous) tags.push(link('prev', metadata.pagination.previous));
+  if (metadata.pagination?.next) tags.push(link('next', metadata.pagination.next));
+
+  // Catch-all custom meta tags
+  if (metadata.other) {
+    for (const [name, values] of Object.entries(metadata.other)) {
+      for (const val of toArray(values)) {
+        tags.push(meta(name, String(val)));
+      }
+    }
+  }
+
+  return tags;
+}
+
 /**
  * Patch the HTML with real metadata from the metaDataGenerator.
- * This produces output identical to what Next.js generates at build time.
+ * This produces output identical to what the framework generates at build time.
  */
 function patchMetadata(html: string, metadata: ClaraMetadata): string {
   let patched = html;
 
-  const title = metadata.title;
-  const description = metadata.description || '';
-  const ogTitle = metadata.openGraph?.title || title;
-  const ogDescription = metadata.openGraph?.description || description;
-
   // 1. Update <title> tag
   patched = patched.replace(
     /<title>[^<]*<\/title>/,
-    `<title>${escapeHtml(title)}</title>`
+    `<title>${escapeHtml(metadata.title)}</title>`
   );
 
-  // 2. Remove existing SEO meta tags (React may have removed empty ones during hydration,
-  //    but the fallback template still has them)
-  patched = patched.replace(/<meta name="description" content="[^"]*"\s*\/?>/g, '');
-  patched = patched.replace(/<meta property="og:title" content="[^"]*"\s*\/?>/g, '');
-  patched = patched.replace(/<meta property="og:description" content="[^"]*"\s*\/?>/g, '');
-  patched = patched.replace(/<meta name="twitter:card" content="[^"]*"\s*\/?>/g, '');
-  patched = patched.replace(/<meta name="twitter:title" content="[^"]*"\s*\/?>/g, '');
-  patched = patched.replace(/<meta name="twitter:description" content="[^"]*"\s*\/?>/g, '');
+  // 2. Remove existing Clara-managed tags broadly.
+  //    Meta tags with name= or property= attributes that Clara generates.
+  patched = patched.replace(/<meta\s+(?:name|property)="(?:description|application-name|generator|creator|publisher|category|classification|abstract|referrer|keywords|author|robots|googlebot|og:[^"]*|twitter:[^"]*|fb:[^"]*|al:[^"]*|google-site-verification|y_key|yandex-verification|me|apple-mobile-web-app-[^"]*|format-detection|apple-itunes-app|pinterest-rich-pin)"\s+content="[^"]*"\s*\/?>/g, '');
+  //    Also match content-first ordering: <meta content="..." name="..."/>
+  patched = patched.replace(/<meta\s+content="[^"]*"\s+(?:name|property)="(?:description|application-name|generator|creator|publisher|category|classification|abstract|referrer|keywords|author|robots|googlebot|og:[^"]*|twitter:[^"]*|fb:[^"]*|al:[^"]*|google-site-verification|y_key|yandex-verification|me|apple-mobile-web-app-[^"]*|format-detection|apple-itunes-app|pinterest-rich-pin)"\s*\/?>/g, '');
+  //    Link tags that Clara manages
+  patched = patched.replace(/<link\s+rel="(?:canonical|alternate|author|icon|shortcut icon|apple-touch-icon|apple-touch-startup-image|manifest|archives|assets|bookmarks|prev|next)"[^>]*\/?>/g, '');
 
-  // 3. Inject meta tags after </title> — matches build-time output format
-  const metaTags = [
-    description ? `<meta name="description" content="${escapeAttr(description)}"/>` : '',
-    `<meta property="og:title" content="${escapeAttr(ogTitle)}"/>`,
-    ogDescription ? `<meta property="og:description" content="${escapeAttr(ogDescription)}"/>` : '',
-    `<meta name="twitter:card" content="summary"/>`,
-    `<meta name="twitter:title" content="${escapeAttr(title)}"/>`,
-    description ? `<meta name="twitter:description" content="${escapeAttr(description)}"/>` : '',
-  ].filter(Boolean).join('');
-
+  // 3. Generate and inject all meta/link tags after </title>
+  const htmlTags = metadataToHtml(metadata);
   patched = patched.replace(
     /(<\/title>)/,
-    `$1${metaTags}`
+    `$1${htmlTags.join('')}`
   );
 
   // 4. Patch RSC flight data so React doesn't overwrite metadata on hydration.
@@ -122,24 +584,172 @@ function patchMetadata(html: string, metadata: ClaraMetadata): string {
   //    where quotes are escaped as \". We must match and replace in that form.
   //    Build-time format:
   //    8:{"metadata":[[...title...],[...meta tags...]],\"error\":null,\"digest\":\"$undefined\"}
-  const q = '\\"'; // escaped quote as it appears in the HTML script
-
-  const metadataEntries = [
-    `[${q}$${q},${q}title${q},${q}0${q},{${q}children${q}:${q}${escapeRsc(title)}${q}}]`,
-    description ? `,[${q}$${q},${q}meta${q},${q}1${q},{${q}name${q}:${q}description${q},${q}content${q}:${q}${escapeRsc(description)}${q}}]` : '',
-    `,[${q}$${q},${q}meta${q},${q}2${q},{${q}property${q}:${q}og:title${q},${q}content${q}:${q}${escapeRsc(ogTitle)}${q}}]`,
-    ogDescription ? `,[${q}$${q},${q}meta${q},${q}3${q},{${q}property${q}:${q}og:description${q},${q}content${q}:${q}${escapeRsc(ogDescription)}${q}}]` : '',
-    `,[${q}$${q},${q}meta${q},${q}4${q},{${q}name${q}:${q}twitter:card${q},${q}content${q}:${q}summary${q}}]`,
-    `,[${q}$${q},${q}meta${q},${q}5${q},{${q}name${q}:${q}twitter:title${q},${q}content${q}:${q}${escapeRsc(title)}${q}}]`,
-    description ? `,[${q}$${q},${q}meta${q},${q}6${q},{${q}name${q}:${q}twitter:description${q},${q}content${q}:${q}${escapeRsc(description)}${q}}]` : '',
-  ].filter(Boolean).join('');
+  const rscEntries = metadataToRscEntries(metadata);
 
   patched = patched.replace(
     /8:\{\\\"metadata\\\":\[[\s\S]*?\],\\\"error\\\":null,\\\"digest\\\":\\\"?\$undefined\\\"?\}/,
-    `8:{\\\"metadata\\\":[${metadataEntries}],\\\"error\\\":null,\\\"digest\\\":\\\"$undefined\\\"}`
+    `8:{\\\"metadata\\\":[${rscEntries}],\\\"error\\\":null,\\\"digest\\\":\\\"$undefined\\\"}`
   );
 
   return patched;
+}
+
+/**
+ * Build RSC flight data metadata entries from ClaraMetadata.
+ * Each entry is a serialized React element in the RSC wire format.
+ * Uses auto-incrementing keys for element IDs.
+ */
+function metadataToRscEntries(metadata: ClaraMetadata): string {
+  const q = '\\"'; // escaped quote as it appears in the HTML script
+  let idx = 0;
+
+  const entries: string[] = [];
+
+  // Title element (special — uses children prop)
+  entries.push(
+    `[${q}$${q},${q}title${q},${q}${idx++}${q},{${q}children${q}:${q}${escapeRsc(metadata.title)}${q}}]`
+  );
+
+  // Helper: emit a <meta> RSC entry with name= or property= attribute
+  const rscMeta = (attrName: string, attrValue: string, content: string) => {
+    entries.push(
+      `,[${q}$${q},${q}meta${q},${q}${idx++}${q},{${q}${attrName}${q}:${q}${escapeRsc(attrValue)}${q},${q}content${q}:${q}${escapeRsc(content)}${q}}]`
+    );
+  };
+
+  const rscLink = (rel: string, href: string, extra?: Record<string, string>) => {
+    let props = `${q}rel${q}:${q}${escapeRsc(rel)}${q},${q}href${q}:${q}${escapeRsc(href)}${q}`;
+    if (extra) {
+      for (const [k, v] of Object.entries(extra)) {
+        props += `,${q}${escapeRsc(k)}${q}:${q}${escapeRsc(v)}${q}`;
+      }
+    }
+    entries.push(`,[${q}$${q},${q}link${q},${q}${idx++}${q},{${props}}]`);
+  };
+
+  // Basic meta
+  if (metadata.description) rscMeta('name', 'description', metadata.description);
+  if (metadata.applicationName) rscMeta('name', 'application-name', metadata.applicationName);
+  if (metadata.generator) rscMeta('name', 'generator', metadata.generator);
+  if (metadata.creator) rscMeta('name', 'creator', metadata.creator);
+  if (metadata.publisher) rscMeta('name', 'publisher', metadata.publisher);
+  if (metadata.category) rscMeta('name', 'category', metadata.category);
+  if (metadata.classification) rscMeta('name', 'classification', metadata.classification);
+  if (metadata.abstract) rscMeta('name', 'abstract', metadata.abstract);
+  if (metadata.referrer) rscMeta('name', 'referrer', metadata.referrer);
+
+  const keywords = toStringArray(metadata.keywords);
+  if (keywords.length > 0) rscMeta('name', 'keywords', keywords.join(', '));
+
+  for (const author of toArray(metadata.authors)) {
+    if (author.name) rscMeta('name', 'author', author.name);
+    if (author.url) rscLink('author', author.url);
+  }
+
+  // Robots
+  if (metadata.robots) {
+    if (typeof metadata.robots === 'string') {
+      rscMeta('name', 'robots', metadata.robots);
+    } else {
+      const robotsStr = robotsInfoToString(metadata.robots);
+      if (robotsStr) rscMeta('name', 'robots', robotsStr);
+      if (metadata.robots.googleBot) {
+        const gbStr = typeof metadata.robots.googleBot === 'string'
+          ? metadata.robots.googleBot
+          : robotsInfoToString(metadata.robots.googleBot);
+        if (gbStr) rscMeta('name', 'googlebot', gbStr);
+      }
+    }
+  }
+
+  // Alternates
+  if (metadata.alternates) {
+    const alt = metadata.alternates;
+    if (alt.canonical) {
+      const href = typeof alt.canonical === 'string' ? alt.canonical : alt.canonical.url;
+      rscLink('canonical', href);
+    }
+    if (alt.languages) {
+      for (const [hreflang, urls] of Object.entries(alt.languages)) {
+        if (typeof urls === 'string') {
+          rscLink('alternate', urls, { hreflang });
+        } else {
+          for (const u of toArray(urls)) {
+            rscLink('alternate', u.url, { hreflang });
+          }
+        }
+      }
+    }
+  }
+
+  // Open Graph
+  if (metadata.openGraph) {
+    const og = metadata.openGraph;
+    if (og.title) rscMeta('property', 'og:title', og.title);
+    if (og.description) rscMeta('property', 'og:description', og.description);
+    if (og.url) rscMeta('property', 'og:url', og.url);
+    if (og.siteName) rscMeta('property', 'og:site_name', og.siteName);
+    if (og.locale) rscMeta('property', 'og:locale', og.locale);
+    if (og.type) rscMeta('property', 'og:type', og.type);
+
+    for (const img of toArray(og.images)) {
+      if (typeof img === 'string') {
+        rscMeta('property', 'og:image', img);
+      } else {
+        rscMeta('property', 'og:image', img.url);
+        if (img.alt) rscMeta('property', 'og:image:alt', img.alt);
+        if (img.width !== undefined) rscMeta('property', 'og:image:width', String(img.width));
+        if (img.height !== undefined) rscMeta('property', 'og:image:height', String(img.height));
+        if (img.type) rscMeta('property', 'og:image:type', img.type);
+      }
+    }
+
+    // Article type-specific
+    if (og.type === 'article') {
+      if (og.publishedTime) rscMeta('property', 'article:published_time', og.publishedTime);
+      if (og.modifiedTime) rscMeta('property', 'article:modified_time', og.modifiedTime);
+      if (og.section) rscMeta('property', 'article:section', og.section);
+      for (const tag of toStringArray(og.tags)) rscMeta('property', 'article:tag', tag);
+    }
+  }
+
+  // Twitter
+  if (metadata.twitter) {
+    const tw = metadata.twitter;
+    const card = ('card' in tw && tw.card) ? tw.card : 'summary';
+    rscMeta('name', 'twitter:card', card);
+    if (tw.site) rscMeta('name', 'twitter:site', tw.site);
+    if (tw.creator) rscMeta('name', 'twitter:creator', tw.creator);
+    if (tw.title) rscMeta('name', 'twitter:title', tw.title);
+    if (tw.description) rscMeta('name', 'twitter:description', tw.description);
+
+    for (const img of toArray(tw.images)) {
+      if (typeof img === 'string') {
+        rscMeta('name', 'twitter:image', img);
+      } else {
+        rscMeta('name', 'twitter:image', img.url);
+        if (img.alt) rscMeta('name', 'twitter:image:alt', img.alt);
+      }
+    }
+  }
+
+  // Verification
+  if (metadata.verification) {
+    const v = metadata.verification;
+    for (const val of toStringArray(v.google)) rscMeta('name', 'google-site-verification', val);
+    for (const val of toStringArray(v.yandex)) rscMeta('name', 'yandex-verification', val);
+  }
+
+  // Catch-all
+  if (metadata.other) {
+    for (const [name, values] of Object.entries(metadata.other)) {
+      for (const val of toArray(values)) {
+        rscMeta('name', name, String(val));
+      }
+    }
+  }
+
+  return entries.join('');
 }
 
 export async function handler(event: RendererEvent): Promise<RendererResult> {
@@ -149,6 +759,24 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
   const s3 = new S3Client({ region });
 
   try {
+    // 0. Check if the page was already rendered (guards against duplicate concurrent requests)
+    const s3Key = deriveS3Key(uri);
+    try {
+      const existing = await s3.send(
+        new GetObjectCommand({ Bucket: bucket, Key: s3Key })
+      );
+      const existingHtml = await existing.Body?.transformToString('utf-8');
+      if (existingHtml) {
+        return {
+          statusCode: 200,
+          body: JSON.stringify({ message: `Already rendered: ${uri}`, key: s3Key }),
+          html: existingHtml,
+        };
+      }
+    } catch {
+      // Page doesn't exist yet — continue with rendering
+    }
+
     // 1. Read the fallback HTML from S3
     const fallbackKey = deriveFallbackKey(uri);
     let fallbackHtml: string;
@@ -190,8 +818,6 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
     }
 
     // 5. Upload to S3
-    const s3Key = deriveS3Key(uri);
-
     await s3.send(
       new PutObjectCommand({
         Bucket: bucket,

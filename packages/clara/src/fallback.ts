@@ -46,27 +46,14 @@ export function generateFallbackFromTemplate(
     '<title>Loading...</title>'
   );
 
-  // 2. Replace meta tags with generic values
-  fallback = fallback.replace(
-    /<meta name="description" content="[^"]*"\/>/,
-    '<meta name="description" content=""/>'
-  );
-  fallback = fallback.replace(
-    /<meta property="og:title" content="[^"]*"\/>/,
-    '<meta property="og:title" content=""/>'
-  );
-  fallback = fallback.replace(
-    /<meta property="og:description" content="[^"]*"\/>/,
-    '<meta property="og:description" content=""/>'
-  );
-  fallback = fallback.replace(
-    /<meta name="twitter:title" content="[^"]*"\/>/,
-    '<meta name="twitter:title" content=""/>'
-  );
-  fallback = fallback.replace(
-    /<meta name="twitter:description" content="[^"]*"\/>/,
-    '<meta name="twitter:description" content=""/>'
-  );
+  // 2. Remove all Clara-managed meta and link tags.
+  //    The renderer will inject the correct ones at render time.
+  //    Match meta tags with name= or property= for all Clara-managed prefixes.
+  fallback = fallback.replace(/<meta\s+(?:name|property)="(?:description|application-name|generator|creator|publisher|category|classification|abstract|referrer|keywords|author|robots|googlebot|og:[^"]*|twitter:[^"]*|fb:[^"]*|al:[^"]*|google-site-verification|y_key|yandex-verification|me|apple-mobile-web-app-[^"]*|format-detection|apple-itunes-app|pinterest-rich-pin)"\s+content="[^"]*"\s*\/?>/g, '');
+  //    Also match content-first ordering
+  fallback = fallback.replace(/<meta\s+content="[^"]*"\s+(?:name|property)="(?:description|application-name|generator|creator|publisher|category|classification|abstract|referrer|keywords|author|robots|googlebot|og:[^"]*|twitter:[^"]*|fb:[^"]*|al:[^"]*|google-site-verification|y_key|yandex-verification|me|apple-mobile-web-app-[^"]*|format-detection|apple-itunes-app|pinterest-rich-pin)"\s*\/?>/g, '');
+  //    Link tags that Clara manages
+  fallback = fallback.replace(/<link\s+rel="(?:canonical|alternate|author|icon|shortcut icon|apple-touch-icon|apple-touch-startup-image|manifest|archives|assets|bookmarks|prev|next)"[^>]*\/?>/g, '');
 
   // 3. Replace server-rendered body content between <main> tags with loading state
   fallback = fallback.replace(
