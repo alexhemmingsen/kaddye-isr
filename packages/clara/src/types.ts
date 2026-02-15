@@ -64,6 +64,8 @@ export interface ClaraPluginConfig {
    */
   routeFile: string;
   provider: ClaraProvider;
+  /** Env var names to forward to the renderer Lambda (values read from process.env at build time) */
+  env?: string[];
 }
 
 export interface ClaraProvider {
@@ -91,6 +93,8 @@ export interface ClaraDeployConfig {
   outputDir: string;
   /** Absolute path to the route file. Bundled into the renderer Lambda at deploy time. */
   routeFile: string;
+  /** Environment variables for the renderer Lambda (key-value pairs resolved at build time) */
+  env?: Record<string, string>;
 }
 
 export interface ClaraManifest {

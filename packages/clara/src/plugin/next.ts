@@ -125,6 +125,21 @@ export function withClara(claraConfig: ClaraPluginConfig) {
   return (nextConfig: NextConfig): NextConfig => {
     const outputDir = nextConfig.distDir ?? (nextConfig.output === 'export' ? 'out' : '.next');
 
+    // Resolve env vars from process.env
+    let env: Record<string, string> | undefined;
+    if (claraConfig.env && claraConfig.env.length > 0) {
+      const resolved: Record<string, string> = {};
+      for (const name of claraConfig.env) {
+        const value = process.env[name];
+        if (value !== undefined) {
+          resolved[name] = value;
+        }
+      }
+      if (Object.keys(resolved).length > 0) {
+        env = resolved;
+      }
+    }
+
     // Write deploy config for `clara deploy`
     const deployConfig: ClaraDeployConfig = {
       routes,
@@ -134,6 +149,7 @@ export function withClara(claraConfig: ClaraPluginConfig) {
       },
       outputDir,
       routeFile: resolve(claraConfig.routeFile),
+      env,
     };
 
     mkdirSync(CLARA_DIR, { recursive: true });

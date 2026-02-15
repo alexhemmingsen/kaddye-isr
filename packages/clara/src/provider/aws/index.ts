@@ -527,6 +527,9 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
           Layers: [],
           MemorySize: 256,
           Timeout: 30,
+          Environment: {
+            Variables: config.env ?? {},
+          },
         })
       );
 
