@@ -39,6 +39,8 @@ interface RendererEvent {
 interface RendererResult {
   statusCode: number;
   body: string;
+  /** The fully rendered HTML — used by the edge handler to serve on first request */
+  html?: string;
 }
 
 const FALLBACK_PLACEHOLDER = '__CLARA_FALLBACK__';
@@ -207,6 +209,7 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
         message: `Rendered and cached: ${uri}`,
         key: s3Key,
       }),
+      html,
     };
   } catch (err) {
     return {

@@ -10,12 +10,11 @@
  * 1. CloudFront viewer-request rewrites /product/5 → /product/5.html
  * 2. S3 returns 403 (file doesn't exist, OAC treats missing as 403)
  * 3. This origin-response handler intercepts:
- *    a. Reads product/_fallback.html from S3
- *    b. Replaces __CLARA_FALLBACK__ placeholder with "5"
- *    c. Serves the patched fallback (user sees loading state, then client fetches data)
- *    d. Invokes the renderer Lambda asynchronously (fire-and-forget)
- *    e. Renderer uses Puppeteer to render the page, captures HTML with SEO metadata
- *    f. Renderer uploads product/5.html to S3 — next request gets the cached version
+ *    a. Invokes the renderer Lambda synchronously
+ *    b. Renderer fetches metadata from the data source, patches fallback HTML with SEO metadata
+ *    c. Renderer uploads product/5.html to S3 and returns the rendered HTML
+ *    d. Edge handler serves the fully rendered HTML (first request gets full SEO)
+ *    e. Subsequent requests hit S3 directly (page is cached)
  */
 
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -190,17 +189,21 @@ function patchFallback(html: string, params: Record<string, string>): string {
 const lambda = new LambdaClient({ region: __CLARA_REGION__ });
 
 /**
- * Invoke the renderer Lambda asynchronously (fire-and-forget).
- * The renderer uses the developer's metadata generators to fetch metadata from
- * the data source, then patches the fallback HTML with real SEO metadata.
+ * Invoke the renderer Lambda synchronously and return the rendered HTML.
+ * The renderer fetches metadata from the data source, patches the fallback HTML,
+ * uploads to S3, and returns the fully rendered HTML.
+ *
+ * This ensures the first request for a new page gets full SEO metadata —
+ * critical for crawlers that only visit once.
+ *
+ * Returns null if the renderer fails (caller falls back to unpatched HTML).
  */
-function invokeRendererAsync(uri: string, match: RouteMatch): void {
-  // Fire-and-forget — don't await the result
-  lambda
-    .send(
+async function invokeRenderer(uri: string, match: RouteMatch): Promise<string | null> {
+  try {
+    const result = await lambda.send(
       new InvokeCommand({
         FunctionName: __CLARA_RENDERER_ARN__,
-        InvocationType: 'Event', // Async invocation
+        InvocationType: 'RequestResponse',
         Payload: JSON.stringify({
           uri,
           bucket: __CLARA_BUCKET_NAME__,
@@ -208,10 +211,17 @@ function invokeRendererAsync(uri: string, match: RouteMatch): void {
           params: match.params,
         }),
       })
-    )
-    .catch(() => {
-      // Silently ignore — renderer failures don't affect the user's request
-    });
+    );
+
+    if (result.FunctionError || !result.Payload) {
+      return null;
+    }
+
+    const payload = JSON.parse(new TextDecoder().decode(result.Payload));
+    return payload.html || null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Response builder ─────────────────────────────────────────────
@@ -271,17 +281,19 @@ export async function handler(
   const cleanUri = uri.replace(/\.html$/, '');
   const match = manifest ? matchRoute(cleanUri, manifest.routes) : null;
 
-  // 3. If route matches: serve the fallback page and invoke renderer
+  // 3. If route matches: invoke renderer synchronously to get fully rendered HTML
   if (match) {
+    // Try to render with full SEO metadata (synchronous — waits for result)
+    const renderedHtml = await invokeRenderer(cleanUri, match);
+
+    if (renderedHtml) {
+      return buildHtmlResponse(renderedHtml, response);
+    }
+
+    // Renderer failed — fall back to unpatched fallback HTML (no SEO, but page still works)
     const fallbackHtml = await getFallbackHtml(match.route);
-
     if (fallbackHtml) {
-      // Patch the placeholder with actual param values
       const patchedHtml = patchFallback(fallbackHtml, match.params);
-
-      // Fire off the renderer asynchronously — it will fetch metadata and build the page
-      invokeRendererAsync(cleanUri, match);
-
       return buildHtmlResponse(patchedHtml, response);
     }
   }
