@@ -1,7 +1,28 @@
 {
-  "name": "clara",
+  "name": "clarajs",
   "version": "0.1.0",
-  "description": "Runtime ISR for static React apps",
+  "description": "Runtime ISR for static React apps — dynamic routing and SEO metadata for statically exported Next.js apps on AWS",
+  "license": "MIT",
+  "keywords": [
+    "react",
+    "nextjs",
+    "isr",
+    "seo",
+    "static-site",
+    "aws",
+    "cloudfront",
+    "lambda",
+    "metadata",
+    "open-graph"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kaddye/clarajs"
+  },
+  "homepage": "https://github.com/kaddye/clara#readme",
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "bin": {
     "clara": "./dist/cli.js"
