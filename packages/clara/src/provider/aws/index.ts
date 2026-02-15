@@ -24,7 +24,9 @@ import {
   CloudFrontClient,
   GetDistributionConfigCommand,
   UpdateDistributionCommand,
-  CreateInvalidationCommand
+  CreateInvalidationCommand,
+  CreateCachePolicyCommand,
+  ListCachePoliciesCommand,
 } from '@aws-sdk/client-cloudfront';
 import type {
   ClaraProvider,
@@ -111,7 +113,61 @@ function outputsToResources(
 }
 
 /**
+ * Managed CachingOptimized policy ID — we need to detect and replace this
+ * because it has MinTTL=1 which prevents the edge handler's max-age=0 from working.
+ */
+const CACHING_OPTIMIZED_POLICY_ID = '658327ea-f89d-4fab-a63d-7e88639e58f6';
+const CLARA_CACHE_POLICY_NAME = 'clara-cache-policy';
+
+/**
+ * Ensure a Clara-specific cache policy exists with MinTTL=0.
+ * Returns the policy ID.
+ */
+async function ensureCachePolicy(cf: CloudFrontClient): Promise<string> {
+  // Check if our custom policy already exists
+  const listResult = await cf.send(
+    new ListCachePoliciesCommand({ Type: 'custom' })
+  );
+
+  const existing = listResult.CachePolicyList?.Items?.find(
+    (item) => item.CachePolicy?.CachePolicyConfig?.Name === CLARA_CACHE_POLICY_NAME
+  );
+
+  if (existing?.CachePolicy?.Id) {
+    return existing.CachePolicy.Id;
+  }
+
+  // Create it
+  const createResult = await cf.send(
+    new CreateCachePolicyCommand({
+      CachePolicyConfig: {
+        Name: CLARA_CACHE_POLICY_NAME,
+        Comment: 'Clara cache policy — MinTTL=0, respects origin Cache-Control',
+        MinTTL: 0,
+        DefaultTTL: 86400,
+        MaxTTL: 31536000,
+        ParametersInCacheKeyAndForwardedToOrigin: {
+          CookiesConfig: { CookieBehavior: 'none' },
+          HeadersConfig: { HeaderBehavior: 'none' },
+          QueryStringsConfig: { QueryStringBehavior: 'none' },
+          EnableAcceptEncodingGzip: true,
+          EnableAcceptEncodingBrotli: true,
+        },
+      },
+    })
+  );
+
+  const policyId = createResult.CachePolicy?.Id;
+  if (!policyId) {
+    throw new Error('[clara/aws] Failed to create cache policy');
+  }
+
+  return policyId;
+}
+
+/**
  * Update CloudFront distribution to use a new Lambda@Edge version.
+ * Also ensures the cache policy has MinTTL=0 (replaces CachingOptimized if needed).
  */
 async function updateCloudFrontEdgeVersion(
   cf: CloudFrontClient,
@@ -140,6 +196,14 @@ async function updateCloudFrontEdgeVersion(
         assoc.LambdaFunctionARN = newVersionArn;
       }
     }
+  }
+
+  // Ensure the cache policy is correct (MinTTL=0, not CachingOptimized)
+  const currentPolicyId = config.DefaultCacheBehavior?.CachePolicyId;
+  if (currentPolicyId === CACHING_OPTIMIZED_POLICY_ID) {
+    console.log('[clara/aws] Replacing CachingOptimized with Clara cache policy (MinTTL=0)...');
+    const claraPolicyId = await ensureCachePolicy(cf);
+    config.DefaultCacheBehavior!.CachePolicyId = claraPolicyId;
   }
 
   // Update the distribution

@@ -245,6 +245,30 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
         },
       },
 
+      // ── CloudFront Cache Policy ──────────────────────────────────
+      // Custom policy with MinTTL=0 so CloudFront respects origin Cache-Control headers.
+      // The edge handler sets max-age=0 for fallback responses (must always hit origin)
+      // and S3 objects have appropriate cache headers for static assets.
+      CachePolicy: {
+        Type: 'AWS::CloudFront::CachePolicy',
+        Properties: {
+          CachePolicyConfig: {
+            Name: { 'Fn::Sub': '${AWS::StackName}-cache-policy' },
+            Comment: 'Clara cache policy — respects origin Cache-Control headers',
+            MinTTL: 0,
+            DefaultTTL: 86400,
+            MaxTTL: 31536000,
+            ParametersInCacheKeyAndForwardedToOrigin: {
+              CookiesConfig: { CookieBehavior: 'none' },
+              HeadersConfig: { HeaderBehavior: 'none' },
+              QueryStringsConfig: { QueryStringBehavior: 'none' },
+              EnableAcceptEncodingGzip: true,
+              EnableAcceptEncodingBrotli: true,
+            },
+          },
+        },
+      },
+
       // ── CloudFront Distribution ────────────────────────────────
       Distribution: {
         Type: 'AWS::CloudFront::Distribution',
@@ -269,8 +293,8 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
               TargetOriginId: 's3-origin',
               ViewerProtocolPolicy: 'redirect-to-https',
               Compress: true,
-              // Use CachingOptimized managed policy
-              CachePolicyId: '658327ea-f89d-4fab-a63d-7e88639e58f6',
+              // Custom cache policy with MinTTL=0 — respects origin Cache-Control
+              CachePolicyId: { Ref: 'CachePolicy' },
               LambdaFunctionAssociations: [
                 {
                   EventType: 'origin-response',
