@@ -401,8 +401,8 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
       // 1. Sync build output to S3 (includes the generated fallback pages)
       console.log('[qlara/aws] Syncing build output to S3...');
       const s3 = createS3Client(res.region);
-      const fileCount = await syncToS3(s3, res.bucketName, buildDir);
-      console.log(`[qlara/aws] Uploaded ${fileCount} files to S3`);
+      const { uploaded, deleted } = await syncToS3(s3, res.bucketName, buildDir);
+      console.log(`[qlara/aws] Uploaded ${uploaded} files, deleted ${deleted} stale files`);
 
       // 2. Bundle and deploy edge handler
       console.log('[qlara/aws] Bundling edge handler...');

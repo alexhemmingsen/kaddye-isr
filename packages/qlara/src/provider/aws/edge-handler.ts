@@ -276,13 +276,20 @@ export async function handler(
 
   // At this point, the file does NOT exist in S3 (403 from OAC or 404)
 
-  // 2. Fetch manifest and check if this URL matches a Qlara dynamic route
+  // 2. Skip non-HTML file requests — these are never dynamic routes
+  //    e.g. /product/20.txt (RSC flight data), /product/20.json, etc.
+  const nonHtmlExt = uri.match(/\.([a-z0-9]+)$/)?.[1];
+  if (nonHtmlExt && nonHtmlExt !== 'html') {
+    return response;
+  }
+
+  // 3. Fetch manifest and check if this URL matches a Qlara dynamic route
   const manifest = await getManifest();
   // Strip .html suffix that the URL rewrite function adds before matching
   const cleanUri = uri.replace(/\.html$/, '');
   const match = manifest ? matchRoute(cleanUri, manifest.routes) : null;
 
-  // 3. If route matches: invoke renderer synchronously to get fully rendered HTML
+  // 4. If route matches: invoke renderer synchronously to get fully rendered HTML
   if (match) {
     // Try to render with full SEO metadata (synchronous — waits for result)
     const renderedHtml = await invokeRenderer(cleanUri, match);
@@ -299,6 +306,6 @@ export async function handler(
     }
   }
 
-  // 4. No match or no fallback — return original error
+  // 5. No match or no fallback — return original error
   return response;
 }

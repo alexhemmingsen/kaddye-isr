@@ -86,6 +86,7 @@ const FALLBACK_PLACEHOLDER = '__QLARA_FALLBACK__';
 function deriveS3Key(uri: string): string {
   const cleanUri = uri.replace(/^\//, '').replace(/\/$/, '');
   if (!cleanUri) return 'index.html';
+  if (cleanUri.endsWith('.html')) return cleanUri;
   return `${cleanUri}.html`;
 }
 
