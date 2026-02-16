@@ -10,46 +10,14 @@
  */
 
 import { build } from 'esbuild';
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import archiver from 'archiver';
 import { Writable } from 'node:stream';
 
 const BUNDLE_DIR = join('.qlara', 'bundles');
-
-/**
- * Resolve the directory of this module at runtime.
- * Works in both ESM (import.meta.url) and CJS (__dirname).
- */
-function getModuleDir(): string {
-  if (typeof __dirname !== 'undefined') {
-    return __dirname;
-  }
-  return dirname(fileURLToPath(import.meta.url));
-}
-
-/**
- * Find the qlara package root by walking up from the module directory
- * until we find a package.json with name "qlara".
- */
-function findPackageRoot(startDir: string): string {
-  let dir = startDir;
-  for (let i = 0; i < 10; i++) {
-    const pkgPath = join(dir, 'package.json');
-    if (existsSync(pkgPath)) {
-      try {
-        const { readFileSync } = require('node:fs');
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        if (pkg.name === 'qlara') return dir;
-      } catch {}
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return startDir;
-}
 
 /**
  * Resolve a Lambda entry point file.
@@ -58,25 +26,32 @@ function findPackageRoot(startDir: string): string {
  * under src/provider/aws/. esbuild bundles them at deploy time into self-contained
  * Lambda ZIP files.
  *
- * Search order:
- * 1. Same directory as this module (running from source — vitest, monorepo)
- * 2. Package root's src/provider/aws/ (installed from npm)
- * 3. Fallback: .js in same directory
+ * We find the qlara package root by resolving 'qlara/package.json' through Node's
+ * module resolution — this works in all environments (pnpm, npm, monorepo).
  */
 function resolveEntry(name: string): string {
-  const moduleDir = getModuleDir();
-
-  // 1. Same directory (running from source — vitest, monorepo dev)
-  const sameDirTs = resolve(moduleDir, `${name}.ts`);
+  // 1. Running from source (vitest, monorepo dev) — same directory
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  const sameDirTs = resolve(thisDir, `${name}.ts`);
   if (existsSync(sameDirTs)) return sameDirTs;
 
-  // 2. Package root's src/provider/aws/ (installed from npm)
-  const pkgRoot = findPackageRoot(moduleDir);
-  const pkgSrcTs = resolve(pkgRoot, 'src', 'provider', 'aws', `${name}.ts`);
-  if (existsSync(pkgSrcTs)) return pkgSrcTs;
+  // 2. Installed from npm — use Node's module resolution to find the package
+  try {
+    const esmRequire = createRequire(import.meta.url);
+    const pkgJsonPath = esmRequire.resolve('qlara/package.json');
+    const pkgRoot = dirname(pkgJsonPath);
+    const srcTs = join(pkgRoot, 'src', 'provider', 'aws', `${name}.ts`);
+    if (existsSync(srcTs)) return srcTs;
+  } catch {}
 
-  // 3. Fallback: .js in same directory
-  return resolve(moduleDir, `${name}.js`);
+  // 3. Relative to dist/ (fallback for monorepo where 'qlara' isn't a resolvable module name)
+  const fromDist = resolve(thisDir, '..', 'src', 'provider', 'aws', `${name}.ts`);
+  if (existsSync(fromDist)) return fromDist;
+
+  throw new Error(
+    `[qlara] Could not find ${name}.ts Lambda source file. ` +
+    `Searched:\n  ${sameDirTs}\n  ${fromDist}`
+  );
 }
 
 /**
