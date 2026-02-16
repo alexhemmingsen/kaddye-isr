@@ -30,23 +30,52 @@ function getModuleDir(): string {
 }
 
 /**
+ * Find the qlara package root by walking up from the module directory
+ * until we find a package.json with name "qlara".
+ */
+function findPackageRoot(startDir: string): string {
+  let dir = startDir;
+  for (let i = 0; i < 10; i++) {
+    const pkgPath = join(dir, 'package.json');
+    if (existsSync(pkgPath)) {
+      try {
+        const { readFileSync } = require('node:fs');
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        if (pkg.name === 'qlara') return dir;
+      } catch {}
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return startDir;
+}
+
+/**
  * Resolve a Lambda entry point file.
  *
- * When running from dist/, source .ts files are at ../src/provider/aws/.
- * When running from src/provider/aws/ directly (vitest), they're in the same dir.
+ * The edge-handler.ts and renderer.ts are shipped as source in the npm package
+ * under src/provider/aws/. esbuild bundles them at deploy time into self-contained
+ * Lambda ZIP files.
+ *
+ * Search order:
+ * 1. Same directory as this module (running from source — vitest, monorepo)
+ * 2. Package root's src/provider/aws/ (installed from npm)
+ * 3. Fallback: .js in same directory
  */
 function resolveEntry(name: string): string {
   const moduleDir = getModuleDir();
 
-  // Same directory (running from source)
+  // 1. Same directory (running from source — vitest, monorepo dev)
   const sameDirTs = resolve(moduleDir, `${name}.ts`);
   if (existsSync(sameDirTs)) return sameDirTs;
 
-  // Running from dist/ — resolve to src/provider/aws/
-  const srcTs = resolve(moduleDir, '..', 'src', 'provider', 'aws', `${name}.ts`);
-  if (existsSync(srcTs)) return srcTs;
+  // 2. Package root's src/provider/aws/ (installed from npm)
+  const pkgRoot = findPackageRoot(moduleDir);
+  const pkgSrcTs = resolve(pkgRoot, 'src', 'provider', 'aws', `${name}.ts`);
+  if (existsSync(pkgSrcTs)) return pkgSrcTs;
 
-  // Fallback: .js in same directory
+  // 3. Fallback: .js in same directory
   return resolve(moduleDir, `${name}.js`);
 }
 
