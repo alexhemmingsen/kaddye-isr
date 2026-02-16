@@ -14,6 +14,7 @@ import {
   UpdateFunctionConfigurationCommand,
   PublishVersionCommand,
   AddPermissionCommand,
+  InvokeCommand,
   waitUntilFunctionUpdatedV2,
 } from '@aws-sdk/client-lambda';
 import {
@@ -42,6 +43,17 @@ import { generateFallbacks } from '../../fallback.js';
 export interface AwsConfig {
   stackName?: string;
   bucketName?: string;
+
+  /**
+   * How long (in seconds) CloudFront should cache dynamically rendered pages.
+   * This sets the `s-maxage` value on the Cache-Control header.
+   *
+   * - Browsers always revalidate with CloudFront (`max-age=0`)
+   * - CloudFront serves from edge cache for this duration
+   *
+   * @default 3600 (1 hour)
+   */
+  cacheTtl?: number;
 
   // ── Bring your own infrastructure ──────────────────────────────
   // When all of these are provided, Qlara skips CloudFormation
@@ -286,6 +298,7 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
   // CloudFront serves from edge locations globally regardless.
   const region = 'us-east-1';
   const byoi = isByoi(awsConfig);
+  const cacheTtl = awsConfig.cacheTtl ?? 3600;
 
   const stackName = byoi ? '' : awsConfig.stackName || STACK_NAME_PREFIX;
 
@@ -397,6 +410,7 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
         bucketName: res.bucketName,
         rendererArn: res.rendererFunctionArn,
         region: res.region,
+        cacheTtl,
       });
 
       const lambda = new LambdaClient({ region: res.region });
@@ -497,7 +511,7 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
       //    metadata generators to fetch metadata, then patches the fallback HTML.
       //    No Chromium or Puppeteer — just S3 reads, data source calls, and S3 writes.
       console.log('[qlara/aws] Bundling renderer...');
-      const rendererZip = await bundleRenderer(config.routeFile);
+      const rendererZip = await bundleRenderer(config.routeFile, cacheTtl);
 
       // Wait for renderer to be ready
       await waitUntilFunctionUpdatedV2(
@@ -586,7 +600,24 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
         );
       }
 
-      // 6. Invalidate CloudFront cache
+      // 6. Warm up the renderer to eliminate cold start on first real request
+      console.log('[qlara/aws] Warming up renderer...');
+      try {
+        await lambda.send(
+          new InvokeCommand({
+            FunctionName: res.rendererFunctionArn,
+            InvocationType: 'RequestResponse',
+            Payload: JSON.stringify({ warmup: true }),
+          })
+        );
+        console.log('[qlara/aws] Renderer warmed up');
+      } catch (err) {
+        console.warn(
+          `[qlara/aws] Renderer warm-up failed (non-critical): ${(err as Error).message}`
+        );
+      }
+
+      // 7. Invalidate CloudFront cache
       console.log('[qlara/aws] Invalidating CloudFront cache...');
       await cf.send(
         new CreateInvalidationCommand({

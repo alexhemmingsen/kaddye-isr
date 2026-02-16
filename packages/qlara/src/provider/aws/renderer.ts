@@ -52,6 +52,9 @@ import type {
 // The routes module is resolved by esbuild at deploy time.
 // esbuild's `alias` option maps this import to the developer's route file.
 // At bundle time: '__qlara_routes__' → './qlara.routes.ts' (or wherever the dev put it)
+// Injected at bundle time by esbuild define
+declare const __QLARA_CACHE_TTL__: number;
+
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at bundle time by esbuild alias
 import routes from '__qlara_routes__';
@@ -752,20 +755,30 @@ function metadataToRscEntries(metadata: QlaraMetadata): string {
   return entries.join('');
 }
 
-export async function handler(event: RendererEvent): Promise<RendererResult> {
+export async function handler(event: RendererEvent & { warmup?: boolean }): Promise<RendererResult> {
+  // Warmup invocation — just initialize the runtime and return
+  if (event.warmup) {
+    return { statusCode: 200, body: 'warm' };
+  }
+
   const { uri, bucket, routePattern, params } = event;
   const region = process.env.AWS_REGION || 'us-east-1';
 
   const s3 = new S3Client({ region });
 
   try {
-    // 0. Check if the page was already rendered (guards against duplicate concurrent requests)
+    // 0. Check if already rendered + read fallback in parallel
     const s3Key = deriveS3Key(uri);
-    try {
-      const existing = await s3.send(
-        new GetObjectCommand({ Bucket: bucket, Key: s3Key })
-      );
-      const existingHtml = await existing.Body?.transformToString('utf-8');
+    const fallbackKey = deriveFallbackKey(uri);
+
+    const [existingResult, fallbackResult] = await Promise.allSettled([
+      s3.send(new GetObjectCommand({ Bucket: bucket, Key: s3Key })),
+      s3.send(new GetObjectCommand({ Bucket: bucket, Key: fallbackKey })),
+    ]);
+
+    // If page already exists, return it (guards against duplicate concurrent requests)
+    if (existingResult.status === 'fulfilled') {
+      const existingHtml = await existingResult.value.Body?.transformToString('utf-8');
       if (existingHtml) {
         return {
           statusCode: 200,
@@ -773,26 +786,20 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
           html: existingHtml,
         };
       }
-    } catch {
-      // Page doesn't exist yet — continue with rendering
     }
 
-    // 1. Read the fallback HTML from S3
-    const fallbackKey = deriveFallbackKey(uri);
+    // Extract fallback HTML
     let fallbackHtml: string;
 
-    try {
-      const response = await s3.send(
-        new GetObjectCommand({ Bucket: bucket, Key: fallbackKey })
-      );
-      fallbackHtml = (await response.Body?.transformToString('utf-8')) || '';
+    if (fallbackResult.status === 'fulfilled') {
+      fallbackHtml = (await fallbackResult.value.Body?.transformToString('utf-8')) || '';
       if (!fallbackHtml) {
         return {
           statusCode: 500,
           body: JSON.stringify({ error: `Empty fallback at ${fallbackKey}` }),
         };
       }
-    } catch {
+    } else {
       return {
         statusCode: 500,
         body: JSON.stringify({ error: `Fallback not found: ${fallbackKey}` }),
@@ -824,8 +831,7 @@ export async function handler(event: RendererEvent): Promise<RendererResult> {
         Key: s3Key,
         Body: html,
         ContentType: 'text/html; charset=utf-8',
-        CacheControl:
-          'public, max-age=0, s-maxage=31536000, stale-while-revalidate=86400',
+        CacheControl: `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60`,
       })
     );
 

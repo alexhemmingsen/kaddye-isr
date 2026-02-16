@@ -24,6 +24,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 declare const __QLARA_BUCKET_NAME__: string;
 declare const __QLARA_RENDERER_ARN__: string;
 declare const __QLARA_REGION__: string;
+declare const __QLARA_CACHE_TTL__: number;
 // ── Types (inlined to keep bundle self-contained) ────────────────
 
 interface ManifestRoute {
@@ -238,7 +239,7 @@ function buildHtmlResponse(
       { key: 'Content-Type', value: 'text/html; charset=utf-8' },
     ],
     'cache-control': [
-      { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' },
+      { key: 'Cache-Control', value: `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60` },
     ],
   };
 

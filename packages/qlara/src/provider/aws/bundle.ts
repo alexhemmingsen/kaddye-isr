@@ -81,6 +81,7 @@ export interface EdgeHandlerConfig {
   bucketName: string;
   rendererArn: string;
   region: string;
+  cacheTtl: number;
 }
 
 /**
@@ -109,6 +110,7 @@ export async function bundleEdgeHandler(
       __QLARA_BUCKET_NAME__: JSON.stringify(config.bucketName),
       __QLARA_RENDERER_ARN__: JSON.stringify(config.rendererArn),
       __QLARA_REGION__: JSON.stringify(config.region),
+      __QLARA_CACHE_TTL__: String(config.cacheTtl),
     },
     // Bundle everything — Lambda@Edge must be self-contained
     external: [],
@@ -130,7 +132,7 @@ export async function bundleEdgeHandler(
  *
  * @param routeFile - Absolute path to the developer's route file
  */
-export async function bundleRenderer(routeFile?: string): Promise<Buffer> {
+export async function bundleRenderer(routeFile?: string, cacheTtl: number = 3600): Promise<Buffer> {
   mkdirSync(BUNDLE_DIR, { recursive: true });
   const outfile = join(BUNDLE_DIR, 'renderer.js');
 
@@ -157,6 +159,9 @@ export async function bundleRenderer(routeFile?: string): Promise<Buffer> {
     outfile,
     minify: true,
     alias,
+    define: {
+      __QLARA_CACHE_TTL__: String(cacheTtl),
+    },
     external: [],
   });
 
