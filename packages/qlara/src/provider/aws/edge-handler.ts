@@ -1,5 +1,5 @@
 /**
- * Lambda@Edge origin-response handler for Clara.
+ * Lambda@Edge origin-response handler for Qlara.
  *
  * This file is bundled into a self-contained ZIP and deployed to Lambda@Edge.
  * It does NOT run in the developer's Node.js — it runs at CloudFront edge locations.
@@ -21,9 +21,9 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
 // ── Injected at bundle time by esbuild define ────────────────────
-declare const __CLARA_BUCKET_NAME__: string;
-declare const __CLARA_RENDERER_ARN__: string;
-declare const __CLARA_REGION__: string;
+declare const __QLARA_BUCKET_NAME__: string;
+declare const __QLARA_RENDERER_ARN__: string;
+declare const __QLARA_REGION__: string;
 // ── Types (inlined to keep bundle self-contained) ────────────────
 
 interface ManifestRoute {
@@ -32,7 +32,7 @@ interface ManifestRoute {
   regex: string;
 }
 
-interface ClaraManifest {
+interface QlaraManifest {
   version: 1;
   routes: ManifestRoute[];
 }
@@ -66,7 +66,7 @@ interface CloudFrontResponseEvent {
 // ── Constants ────────────────────────────────────────────────────
 
 const FALLBACK_FILENAME = '_fallback.html';
-const FALLBACK_PLACEHOLDER = '__CLARA_FALLBACK__';
+const FALLBACK_PLACEHOLDER = '__QLARA_FALLBACK__';
 
 // ── Caching ──────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ interface CacheEntry<T> {
 const MANIFEST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const FALLBACK_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-let manifestCache: CacheEntry<ClaraManifest> = { data: null, expiry: 0 };
+let manifestCache: CacheEntry<QlaraManifest> = { data: null, expiry: 0 };
 const fallbackCache: Map<string, CacheEntry<string>> = new Map();
 
 // ── Route matching (inlined from routes.ts) ──────────────────────
@@ -104,9 +104,9 @@ function matchRoute(url: string, routes: ManifestRoute[]): RouteMatch | null {
 
 // ── S3 helpers ───────────────────────────────────────────────────
 
-const s3 = new S3Client({ region: __CLARA_REGION__ });
+const s3 = new S3Client({ region: __QLARA_REGION__ });
 
-async function getManifest(): Promise<ClaraManifest | null> {
+async function getManifest(): Promise<QlaraManifest | null> {
   if (manifestCache.data && Date.now() < manifestCache.expiry) {
     return manifestCache.data;
   }
@@ -114,14 +114,14 @@ async function getManifest(): Promise<ClaraManifest | null> {
   try {
     const response = await s3.send(
       new GetObjectCommand({
-        Bucket: __CLARA_BUCKET_NAME__,
-        Key: 'clara-manifest.json',
+        Bucket: __QLARA_BUCKET_NAME__,
+        Key: 'qlara-manifest.json',
       })
     );
     const body = await response.Body?.transformToString('utf-8');
     if (!body) return null;
 
-    const manifest = JSON.parse(body) as ClaraManifest;
+    const manifest = JSON.parse(body) as QlaraManifest;
     manifestCache = { data: manifest, expiry: Date.now() + MANIFEST_CACHE_TTL };
     return manifest;
   } catch {
@@ -150,7 +150,7 @@ async function getFallbackHtml(route: ManifestRoute): Promise<string | null> {
   try {
     const response = await s3.send(
       new GetObjectCommand({
-        Bucket: __CLARA_BUCKET_NAME__,
+        Bucket: __QLARA_BUCKET_NAME__,
         Key: fallbackKey,
       })
     );
@@ -168,7 +168,7 @@ async function getFallbackHtml(route: ManifestRoute): Promise<string | null> {
 }
 
 /**
- * Patch the fallback HTML by replacing __CLARA_FALLBACK__ with actual param values.
+ * Patch the fallback HTML by replacing __QLARA_FALLBACK__ with actual param values.
  */
 function patchFallback(html: string, params: Record<string, string>): string {
   let patched = html;
@@ -186,7 +186,7 @@ function patchFallback(html: string, params: Record<string, string>): string {
 
 // ── Renderer invocation ──────────────────────────────────────────
 
-const lambda = new LambdaClient({ region: __CLARA_REGION__ });
+const lambda = new LambdaClient({ region: __QLARA_REGION__ });
 
 /**
  * Invoke the renderer Lambda synchronously and return the rendered HTML.
@@ -202,11 +202,11 @@ async function invokeRenderer(uri: string, match: RouteMatch): Promise<string | 
   try {
     const result = await lambda.send(
       new InvokeCommand({
-        FunctionName: __CLARA_RENDERER_ARN__,
+        FunctionName: __QLARA_RENDERER_ARN__,
         InvocationType: 'RequestResponse',
         Payload: JSON.stringify({
           uri,
-          bucket: __CLARA_BUCKET_NAME__,
+          bucket: __QLARA_BUCKET_NAME__,
           routePattern: match.route.pattern,
           params: match.params,
         }),
@@ -275,7 +275,7 @@ export async function handler(
 
   // At this point, the file does NOT exist in S3 (403 from OAC or 404)
 
-  // 2. Fetch manifest and check if this URL matches a Clara dynamic route
+  // 2. Fetch manifest and check if this URL matches a Qlara dynamic route
   const manifest = await getManifest();
   // Strip .html suffix that the URL rewrite function adds before matching
   const cleanUri = uri.replace(/\.html$/, '');

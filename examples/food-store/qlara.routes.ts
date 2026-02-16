@@ -1,7 +1,7 @@
-import type { ClaraRoutes } from 'clara';
+import type { QlaraRoutes } from 'qlara';
 import { getProduct } from './lib/supabase';
 
-const routes: ClaraRoutes = [
+const routes: QlaraRoutes = [
   {
     route: '/product/:id',
     metaDataGenerator: async (params) => {

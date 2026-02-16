@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { validateConfig } from './config.js';
-import type { ClaraPluginConfig, ClaraProvider, ClaraRoute } from './types.js';
+import type { QlaraPluginConfig, QlaraProvider, QlaraRoute } from './types.js';
 
-function makeProvider(): ClaraProvider {
+function makeProvider(): QlaraProvider {
   return {
     name: 'test',
     config: {},
@@ -18,16 +18,16 @@ function makeProvider(): ClaraProvider {
 }
 
 function makeConfig(
-  overrides?: Partial<ClaraPluginConfig>
-): ClaraPluginConfig {
+  overrides?: Partial<QlaraPluginConfig>
+): QlaraPluginConfig {
   return {
-    routeFile: './clara.routes.ts',
+    routeFile: './qlara.routes.ts',
     provider: makeProvider(),
     ...overrides,
   };
 }
 
-function makeRoutes(patterns: string[] = ['/product/:id']): ClaraRoute[] {
+function makeRoutes(patterns: string[] = ['/product/:id']): QlaraRoute[] {
   return patterns.map((pattern) => ({ pattern }));
 }
 
@@ -45,7 +45,7 @@ describe('validateConfig', () => {
   it('rejects missing routeFile', () => {
     expect(() =>
       validateConfig({ provider: makeProvider() } as any, makeRoutes())
-    ).toThrow('[clara] config.routeFile is required');
+    ).toThrow('[qlara] config.routeFile is required');
   });
 
   it('rejects empty routes', () => {
@@ -57,7 +57,7 @@ describe('validateConfig', () => {
   it('rejects missing provider', () => {
     expect(() =>
       validateConfig({ routeFile: './loaders.ts' } as any, makeRoutes())
-    ).toThrow('[clara] config.provider is required');
+    ).toThrow('[qlara] config.provider is required');
   });
 
   it('rejects route without leading slash', () => {

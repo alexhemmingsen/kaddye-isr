@@ -1,5 +1,5 @@
 {
-  "name": "clarajs",
+  "name": "qlara",
   "version": "0.1.0",
   "description": "Runtime ISR for static React apps — dynamic routing and SEO metadata for statically exported Next.js apps on AWS",
   "license": "MIT",
@@ -17,15 +17,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/kaddye/clarajs"
+    "url": "https://github.com/kaddye/qlara"
   },
-  "homepage": "https://github.com/kaddye/clara#readme",
+  "homepage": "https://github.com/kaddye/qlara#readme",
   "engines": {
     "node": ">=18"
   },
   "type": "module",
   "bin": {
-    "clara": "./dist/cli.js"
+    "qlara": "./dist/cli.js"
   },
   "exports": {
     ".": {

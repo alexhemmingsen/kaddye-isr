@@ -29,8 +29,8 @@ import {
   ListCachePoliciesCommand,
 } from '@aws-sdk/client-cloudfront';
 import type {
-  ClaraProvider,
-  ClaraDeployConfig,
+  QlaraProvider,
+  QlaraDeployConfig,
   ProviderResources
 } from '../../types.js';
 import { createS3Client, syncToS3, emptyBucket } from './s3.js';
@@ -44,7 +44,7 @@ export interface AwsConfig {
   bucketName?: string;
 
   // ── Bring your own infrastructure ──────────────────────────────
-  // When all of these are provided, Clara skips CloudFormation
+  // When all of these are provided, Qlara skips CloudFormation
   // and deploys directly to the existing resources.
   distributionId?: string;
   distributionDomain?: string;
@@ -77,7 +77,7 @@ async function getStackOutputs(
   const stack = result.Stacks?.[0];
   if (!stack || !stack.Outputs) {
     throw new Error(
-      `[clara/aws] Stack ${stackName} not found or has no outputs`
+      `[qlara/aws] Stack ${stackName} not found or has no outputs`
     );
   }
 
@@ -116,10 +116,10 @@ function outputsToResources(
  * because it has MinTTL=1 which prevents the edge handler's max-age=0 from working.
  */
 const CACHING_OPTIMIZED_POLICY_ID = '658327ea-f89d-4fab-a63d-7e88639e58f6';
-const CLARA_CACHE_POLICY_NAME = 'clara-cache-policy';
+const QLARA_CACHE_POLICY_NAME = 'qlara-cache-policy';
 
 /**
- * Ensure a Clara-specific cache policy exists with MinTTL=0.
+ * Ensure a Qlara-specific cache policy exists with MinTTL=0.
  * Returns the policy ID.
  */
 async function ensureCachePolicy(cf: CloudFrontClient): Promise<string> {
@@ -129,7 +129,7 @@ async function ensureCachePolicy(cf: CloudFrontClient): Promise<string> {
   );
 
   const existing = listResult.CachePolicyList?.Items?.find(
-    (item) => item.CachePolicy?.CachePolicyConfig?.Name === CLARA_CACHE_POLICY_NAME
+    (item) => item.CachePolicy?.CachePolicyConfig?.Name === QLARA_CACHE_POLICY_NAME
   );
 
   if (existing?.CachePolicy?.Id) {
@@ -140,8 +140,8 @@ async function ensureCachePolicy(cf: CloudFrontClient): Promise<string> {
   const createResult = await cf.send(
     new CreateCachePolicyCommand({
       CachePolicyConfig: {
-        Name: CLARA_CACHE_POLICY_NAME,
-        Comment: 'Clara cache policy — MinTTL=0, respects origin Cache-Control',
+        Name: QLARA_CACHE_POLICY_NAME,
+        Comment: 'Qlara cache policy — MinTTL=0, respects origin Cache-Control',
         MinTTL: 0,
         DefaultTTL: 86400,
         MaxTTL: 31536000,
@@ -158,7 +158,7 @@ async function ensureCachePolicy(cf: CloudFrontClient): Promise<string> {
 
   const policyId = createResult.CachePolicy?.Id;
   if (!policyId) {
-    throw new Error('[clara/aws] Failed to create cache policy');
+    throw new Error('[qlara/aws] Failed to create cache policy');
   }
 
   return policyId;
@@ -182,7 +182,7 @@ async function updateCloudFrontEdgeVersion(
   const etag = getResult.ETag;
 
   if (!config || !etag) {
-    throw new Error('[clara/aws] Could not get distribution config');
+    throw new Error('[qlara/aws] Could not get distribution config');
   }
 
   // Update Lambda@Edge association in the default cache behavior
@@ -200,9 +200,9 @@ async function updateCloudFrontEdgeVersion(
   // Ensure the cache policy is correct (MinTTL=0, not CachingOptimized)
   const currentPolicyId = config.DefaultCacheBehavior?.CachePolicyId;
   if (currentPolicyId === CACHING_OPTIMIZED_POLICY_ID) {
-    console.log('[clara/aws] Replacing CachingOptimized with Clara cache policy (MinTTL=0)...');
-    const claraPolicyId = await ensureCachePolicy(cf);
-    config.DefaultCacheBehavior!.CachePolicyId = claraPolicyId;
+    console.log('[qlara/aws] Replacing CachingOptimized with Qlara cache policy (MinTTL=0)...');
+    const qlaraPolicyId = await ensureCachePolicy(cf);
+    config.DefaultCacheBehavior!.CachePolicyId = qlaraPolicyId;
   }
 
   // Update the distribution
@@ -259,12 +259,12 @@ function byoiResources(
 }
 
 /**
- * AWS provider for Clara.
+ * AWS provider for Qlara.
  *
  * All resources are deployed in us-east-1 (Lambda@Edge requirement).
  * CloudFront serves from edge locations globally regardless.
  *
- * Usage — Clara manages everything:
+ * Usage — Qlara manages everything:
  * ```typescript
  * aws()
  * ```
@@ -280,7 +280,7 @@ function byoiResources(
  * })
  * ```
  */
-export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
+export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
   // All resources live in us-east-1 because Lambda@Edge requires it
   // and everything is in a single CloudFormation stack.
   // CloudFront serves from edge locations globally regardless.
@@ -293,10 +293,10 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
     name: 'aws',
     config: { ...awsConfig },
 
-    async setup(_config: ClaraDeployConfig): Promise<AwsResources> {
+    async setup(_config: QlaraDeployConfig): Promise<AwsResources> {
       // BYOI: no provisioning needed — return the pre-configured resources
       if (byoi) {
-        console.log('[clara/aws] Using existing infrastructure (BYOI mode)');
+        console.log('[qlara/aws] Using existing infrastructure (BYOI mode)');
         return byoiResources(awsConfig as AwsConfig & { bucketName: string });
       }
 
@@ -312,14 +312,14 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         const status = existing.Stacks?.[0]?.StackStatus;
         if (status === 'ROLLBACK_COMPLETE' || status === 'DELETE_FAILED') {
           console.log(
-            `[clara/aws] Found failed stack (${status}). Deleting before retry...`
+            `[qlara/aws] Found failed stack (${status}). Deleting before retry...`
           );
           await cfn.send(new DeleteStackCommand({ StackName: stackName }));
           await waitUntilStackDeleteComplete(
             { client: cfn, maxWaitTime: 300 },
             { StackName: stackName }
           );
-          console.log('[clara/aws] Old stack deleted');
+          console.log('[qlara/aws] Old stack deleted');
         } else if (status) {
           stackExists = true;
         }
@@ -328,9 +328,9 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       }
 
       if (stackExists) {
-        console.log(`[clara/aws] Stack ${stackName} already exists`);
+        console.log(`[qlara/aws] Stack ${stackName} already exists`);
       } else {
-        console.log(`[clara/aws] Creating CloudFormation stack: ${stackName}`);
+        console.log(`[qlara/aws] Creating CloudFormation stack: ${stackName}`);
 
         await cfn.send(
           new CreateStackCommand({
@@ -341,7 +341,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         );
 
         console.log(
-          '[clara/aws] Waiting for stack creation (this may take a few minutes)...'
+          '[qlara/aws] Waiting for stack creation (this may take a few minutes)...'
         );
 
         try {
@@ -360,13 +360,13 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
             .slice(0, 5);
 
           if (failures.length) {
-            console.error('[clara/aws] Stack creation failed:');
+            console.error('[qlara/aws] Stack creation failed:');
             failures.forEach((f) => console.error(f));
           }
           throw new Error('CloudFormation stack creation failed');
         }
 
-        console.log('[clara/aws] Stack created successfully');
+        console.log('[qlara/aws] Stack created successfully');
       }
 
       const outputs = await getStackOutputs(cfn, stackName);
@@ -374,25 +374,25 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
     },
 
     async deploy(
-      config: ClaraDeployConfig,
+      config: QlaraDeployConfig,
       resources: ProviderResources,
     ): Promise<void> {
       const res = resources as AwsResources;
       const buildDir = config.outputDir;
 
       // 0. Generate fallback pages for dynamic routes before uploading
-      console.log('[clara/aws] Generating fallback pages...');
+      console.log('[qlara/aws] Generating fallback pages...');
       const fallbacks = generateFallbacks(buildDir, config.routes);
-      console.log(`[clara/aws] Generated ${fallbacks.length} fallback page(s)`);
+      console.log(`[qlara/aws] Generated ${fallbacks.length} fallback page(s)`);
 
       // 1. Sync build output to S3 (includes the generated fallback pages)
-      console.log('[clara/aws] Syncing build output to S3...');
+      console.log('[qlara/aws] Syncing build output to S3...');
       const s3 = createS3Client(res.region);
       const fileCount = await syncToS3(s3, res.bucketName, buildDir);
-      console.log(`[clara/aws] Uploaded ${fileCount} files to S3`);
+      console.log(`[qlara/aws] Uploaded ${fileCount} files to S3`);
 
       // 2. Bundle and deploy edge handler
-      console.log('[clara/aws] Bundling edge handler...');
+      console.log('[qlara/aws] Bundling edge handler...');
       const edgeZip = await bundleEdgeHandler({
         bucketName: res.bucketName,
         rendererArn: res.rendererFunctionArn,
@@ -402,7 +402,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const lambda = new LambdaClient({ region: res.region });
 
       // Wait for the function to be ready (may still be updating from stack creation)
-      console.log('[clara/aws] Waiting for edge handler to be ready...');
+      console.log('[qlara/aws] Waiting for edge handler to be ready...');
       await waitUntilFunctionUpdatedV2(
         { client: lambda, maxWaitTime: 120 },
         { FunctionName: res.edgeFunctionArn }
@@ -421,7 +421,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         { FunctionName: res.edgeFunctionArn }
       );
 
-      console.log('[clara/aws] Deploying edge handler...');
+      console.log('[qlara/aws] Deploying edge handler...');
       await lambda.send(
         new UpdateFunctionCodeCommand({
           FunctionName: res.edgeFunctionArn,
@@ -445,12 +445,12 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       const newVersionArn = versionResult.FunctionArn;
       if (!newVersionArn) {
         throw new Error(
-          '[clara/aws] Failed to publish new edge handler version'
+          '[qlara/aws] Failed to publish new edge handler version'
         );
       }
 
       console.log(
-        `[clara/aws] Published edge handler version: ${newVersionArn}`
+        `[qlara/aws] Published edge handler version: ${newVersionArn}`
       );
 
       // 3b. Add permission for CloudFront/Lambda@Edge to invoke this version
@@ -488,7 +488,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       }
 
       // 4. Update CloudFront to use the new edge handler version
-      console.log('[clara/aws] Updating CloudFront distribution...');
+      console.log('[qlara/aws] Updating CloudFront distribution...');
       const cf = new CloudFrontClient({ region: res.region });
       await updateCloudFrontEdgeVersion(cf, res.distributionId, newVersionArn);
 
@@ -496,7 +496,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       //    The renderer is a simple Node.js Lambda that calls the developer's
       //    metadata generators to fetch metadata, then patches the fallback HTML.
       //    No Chromium or Puppeteer — just S3 reads, data source calls, and S3 writes.
-      console.log('[clara/aws] Bundling renderer...');
+      console.log('[qlara/aws] Bundling renderer...');
       const rendererZip = await bundleRenderer(config.routeFile);
 
       // Wait for renderer to be ready
@@ -505,7 +505,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         { FunctionName: res.rendererFunctionArn }
       );
 
-      console.log('[clara/aws] Deploying renderer...');
+      console.log('[qlara/aws] Deploying renderer...');
       await lambda.send(
         new UpdateFunctionCodeCommand({
           FunctionName: res.rendererFunctionArn,
@@ -520,7 +520,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       );
 
       // 5b. Configure renderer — 256MB is plenty (no Chromium needed)
-      console.log('[clara/aws] Configuring renderer...');
+      console.log('[qlara/aws] Configuring renderer...');
       await lambda.send(
         new UpdateFunctionConfigurationCommand({
           FunctionName: res.rendererFunctionArn,
@@ -539,7 +539,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       );
 
       // 5c. Ensure renderer has full S3 permissions (read fallback + write rendered pages)
-      console.log('[clara/aws] Ensuring renderer permissions...');
+      console.log('[qlara/aws] Ensuring renderer permissions...');
       try {
         const cfn = new CloudFormationClient({ region: res.region });
         const stackResources = await cfn.send(
@@ -560,7 +560,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
           await iam.send(
             new PutRolePolicyCommand({
               RoleName: rendererRole.PhysicalResourceId,
-              PolicyName: 'ClaraRendererS3Policy',
+              PolicyName: 'QlaraRendererS3Policy',
               PolicyDocument: JSON.stringify({
                 Version: '2012-10-17',
                 Statement: [
@@ -578,21 +578,21 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
               }),
             })
           );
-          console.log('[clara/aws] Renderer S3 permissions applied');
+          console.log('[qlara/aws] Renderer S3 permissions applied');
         }
       } catch (err) {
         console.warn(
-          `[clara/aws] Could not update renderer permissions: ${(err as Error).message}`
+          `[qlara/aws] Could not update renderer permissions: ${(err as Error).message}`
         );
       }
 
       // 6. Invalidate CloudFront cache
-      console.log('[clara/aws] Invalidating CloudFront cache...');
+      console.log('[qlara/aws] Invalidating CloudFront cache...');
       await cf.send(
         new CreateInvalidationCommand({
           DistributionId: res.distributionId,
           InvalidationBatch: {
-            CallerReference: `clara-${Date.now()}`,
+            CallerReference: `qlara-${Date.now()}`,
             Paths: {
               Quantity: 1,
               Items: ['/*']
@@ -601,13 +601,13 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         })
       );
 
-      console.log('[clara/aws] Deploy complete!');
+      console.log('[qlara/aws] Deploy complete!');
       console.log(
-        `[clara/aws] Site available at: https://${res.distributionDomain}`
+        `[qlara/aws] Site available at: https://${res.distributionDomain}`
       );
     },
 
-    async exists(_config: ClaraDeployConfig): Promise<AwsResources | null> {
+    async exists(_config: QlaraDeployConfig): Promise<AwsResources | null> {
       // BYOI: infrastructure always "exists"
       if (byoi) {
         return byoiResources(awsConfig as AwsConfig & { bucketName: string });
@@ -628,27 +628,27 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
       // BYOI: refuse to tear down externally-managed infrastructure
       if (byoi) {
         console.log(
-          '[clara/aws] Infrastructure is externally managed (BYOI mode).'
+          '[qlara/aws] Infrastructure is externally managed (BYOI mode).'
         );
         console.log(
-          '[clara/aws] Skipping teardown — delete these resources manually.'
+          '[qlara/aws] Skipping teardown — delete these resources manually.'
         );
         return;
       }
 
       // Empty the bucket first (CloudFormation can't delete non-empty buckets)
-      console.log('[clara/aws] Emptying S3 bucket...');
+      console.log('[qlara/aws] Emptying S3 bucket...');
       const s3 = createS3Client(res.region);
       await emptyBucket(s3, res.bucketName);
 
       // Delete the CloudFormation stack
-      console.log('[clara/aws] Deleting CloudFormation stack...');
+      console.log('[qlara/aws] Deleting CloudFormation stack...');
       const cfn = new CloudFormationClient({ region: res.region });
 
       await cfn.send(new DeleteStackCommand({ StackName: res.stackName }));
 
       console.log(
-        '[clara/aws] Waiting for stack deletion (this may take a few minutes)...'
+        '[qlara/aws] Waiting for stack deletion (this may take a few minutes)...'
       );
 
       await waitUntilStackDeleteComplete(
@@ -656,7 +656,7 @@ export function aws(awsConfig: AwsConfig = {}): ClaraProvider {
         { StackName: res.stackName }
       );
 
-      console.log('[clara/aws] Infrastructure deleted');
+      console.log('[qlara/aws] Infrastructure deleted');
     }
   };
 }

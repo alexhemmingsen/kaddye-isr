@@ -4,7 +4,7 @@ export interface CloudFormationConfig {
 }
 
 /**
- * Build a CloudFormation template for Clara's AWS infrastructure.
+ * Build a CloudFormation template for Qlara's AWS infrastructure.
  *
  * Creates:
  * - S3 bucket (private, OAC access only)
@@ -17,7 +17,7 @@ export interface CloudFormationConfig {
 export function buildTemplate(config: CloudFormationConfig): Record<string, unknown> {
   return {
     AWSTemplateFormatVersion: '2010-09-09',
-    Description: `Clara ISR infrastructure — ${config.stackName}`,
+    Description: `Qlara ISR infrastructure — ${config.stackName}`,
 
     Resources: {
       // ── S3 Bucket ──────────────────────────────────────────────
@@ -123,7 +123,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
           ],
           Policies: [
             {
-              PolicyName: 'ClaraEdgePolicy',
+              PolicyName: 'QlaraEdgePolicy',
               PolicyDocument: {
                 Statement: [
                   {
@@ -144,7 +144,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
       },
 
       // ── Lambda@Edge Function ───────────────────────────────────
-      // Placeholder code — real handler is deployed via `clara deploy`
+      // Placeholder code — real handler is deployed via `qlara deploy`
       EdgeHandlerFunction: {
         Type: 'AWS::Lambda::Function',
         Properties: {
@@ -207,7 +207,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
           ],
           Policies: [
             {
-              PolicyName: 'ClaraRendererPolicy',
+              PolicyName: 'QlaraRendererPolicy',
               PolicyDocument: {
                 Statement: [
                   {
@@ -228,7 +228,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
       },
 
       // ── Renderer Lambda ────────────────────────────────────────
-      // Placeholder code — real handler is deployed via `clara deploy`
+      // Placeholder code — real handler is deployed via `qlara deploy`
       RendererFunction: {
         Type: 'AWS::Lambda::Function',
         Properties: {
@@ -253,7 +253,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
         Properties: {
           CachePolicyConfig: {
             Name: { 'Fn::Sub': '${AWS::StackName}-cache-policy' },
-            Comment: 'Clara cache policy — respects origin Cache-Control headers',
+            Comment: 'Qlara cache policy — respects origin Cache-Control headers',
             MinTTL: 0,
             DefaultTTL: 86400,
             MaxTTL: 31536000,

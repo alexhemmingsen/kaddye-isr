@@ -1,8 +1,8 @@
-import { withClara } from 'clara/next';
-import { aws } from 'clara/aws';
+import { withQlara } from 'qlara/next';
+import { aws } from 'qlara/aws';
 
-export default withClara({
-  routeFile: './clara.routes.ts',
+export default withQlara({
+  routeFile: './qlara.routes.ts',
   provider: aws(),
   env: ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY'],
 })({

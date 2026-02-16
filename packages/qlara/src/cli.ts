@@ -1,29 +1,29 @@
 /**
- * Clara CLI
+ * Qlara CLI
  *
  * Usage:
- *   clara deploy     — Deploy the build output to the configured provider
- *   clara teardown   — Destroy all provisioned infrastructure
+ *   qlara deploy     — Deploy the build output to the configured provider
+ *   qlara teardown   — Destroy all provisioned infrastructure
  *
  * Prerequisites:
  *   1. Run `next build` (or your framework's build command) first
- *   2. The build must use the Clara plugin (e.g. withClara() in next.config.ts)
- *   3. This creates .clara/config.json with the deploy config
+ *   2. The build must use the Qlara plugin (e.g. withQlara() in next.config.ts)
+ *   3. This creates .qlara/config.json with the deploy config
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ClaraDeployConfig, ProviderResources } from './types.js';
-import { CLARA_DIR, RESOURCES_FILE } from './provider/aws/constants.js';
+import type { QlaraDeployConfig, ProviderResources } from './types.js';
+import { QLARA_DIR, RESOURCES_FILE } from './provider/aws/constants.js';
 import { aws } from './provider/aws/index.js';
 
-const CONFIG_PATH = join(CLARA_DIR, 'config.json');
-const RESOURCES_PATH = join(CLARA_DIR, RESOURCES_FILE);
+const CONFIG_PATH = join(QLARA_DIR, 'config.json');
+const RESOURCES_PATH = join(QLARA_DIR, RESOURCES_FILE);
 
 /**
  * Reconstruct a provider from serialized config.
  */
-function createProvider(providerConfig: ClaraDeployConfig['provider']) {
+function createProvider(providerConfig: QlaraDeployConfig['provider']) {
   switch (providerConfig.name) {
     case 'aws':
       return aws({
@@ -35,17 +35,17 @@ function createProvider(providerConfig: ClaraDeployConfig['provider']) {
         rendererFunctionArn: providerConfig.rendererFunctionArn as string | undefined,
       });
     default:
-      throw new Error(`[clara] Unknown provider: ${providerConfig.name}`);
+      throw new Error(`[qlara] Unknown provider: ${providerConfig.name}`);
   }
 }
 
 /**
- * Load the deploy config from .clara/config.json.
+ * Load the deploy config from .qlara/config.json.
  */
-function loadConfig(): ClaraDeployConfig {
+function loadConfig(): QlaraDeployConfig {
   if (!existsSync(CONFIG_PATH)) {
-    console.error('[clara] No config found at .clara/config.json');
-    console.error('[clara] Run your framework build first (e.g. `next build`)');
+    console.error('[qlara] No config found at .qlara/config.json');
+    console.error('[qlara] Run your framework build first (e.g. `next build`)');
     process.exit(1);
   }
 
@@ -53,7 +53,7 @@ function loadConfig(): ClaraDeployConfig {
 }
 
 /**
- * Load cached resources from .clara/resources.json.
+ * Load cached resources from .qlara/resources.json.
  */
 function loadResources(): ProviderResources | null {
   if (!existsSync(RESOURCES_PATH)) return null;
@@ -61,10 +61,10 @@ function loadResources(): ProviderResources | null {
 }
 
 /**
- * Save resources to .clara/resources.json.
+ * Save resources to .qlara/resources.json.
  */
 function saveResources(resources: ProviderResources): void {
-  mkdirSync(CLARA_DIR, { recursive: true });
+  mkdirSync(QLARA_DIR, { recursive: true });
   writeFileSync(RESOURCES_PATH, JSON.stringify(resources, null, 2));
 }
 
@@ -73,12 +73,12 @@ async function deploy() {
   const provider = createProvider(config.provider);
 
   // Always run setup — it handles both creating new stacks and updating existing ones
-  console.log(`[clara] Setting up ${provider.name} infrastructure...`);
+  console.log(`[qlara] Setting up ${provider.name} infrastructure...`);
   const resources = await provider.setup(config);
   saveResources(resources);
 
   // Deploy
-  console.log(`[clara] Deploying to ${provider.name}...`);
+  console.log(`[qlara] Deploying to ${provider.name}...`);
   await provider.deploy(config, resources);
 }
 
@@ -88,11 +88,11 @@ async function teardown() {
 
   const resources = loadResources();
   if (!resources) {
-    console.error('[clara] No resources found. Nothing to tear down.');
+    console.error('[qlara] No resources found. Nothing to tear down.');
     process.exit(1);
   }
 
-  console.log(`[clara] Tearing down ${provider.name} infrastructure...`);
+  console.log(`[qlara] Tearing down ${provider.name} infrastructure...`);
   await provider.teardown(resources);
 
   // Clean up local state
@@ -101,7 +101,7 @@ async function teardown() {
     unlinkSync(RESOURCES_PATH);
   }
 
-  console.log('[clara] Teardown complete');
+  console.log('[qlara] Teardown complete');
 }
 
 // ── CLI entry point ──────────────────────────────────────────────
@@ -111,23 +111,23 @@ const command = process.argv[2];
 switch (command) {
   case 'deploy':
     deploy().catch((err) => {
-      console.error(`[clara] Deploy failed: ${err.message}`);
+      console.error(`[qlara] Deploy failed: ${err.message}`);
       process.exit(1);
     });
     break;
 
   case 'teardown':
     teardown().catch((err) => {
-      console.error(`[clara] Teardown failed: ${err.message}`);
+      console.error(`[qlara] Teardown failed: ${err.message}`);
       process.exit(1);
     });
     break;
 
   default:
-    console.log('Clara — Runtime ISR for static React apps\n');
+    console.log('Qlara — Runtime ISR for static React apps\n');
     console.log('Usage:');
-    console.log('  clara deploy     Deploy the build to the configured provider');
-    console.log('  clara teardown   Destroy all provisioned infrastructure');
+    console.log('  qlara deploy     Deploy the build to the configured provider');
+    console.log('  qlara teardown   Destroy all provisioned infrastructure');
     console.log('');
     console.log('Before deploying, run your framework build (e.g. `next build`).');
     if (!command) process.exit(0);

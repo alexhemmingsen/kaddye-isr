@@ -1,12 +1,12 @@
 /**
- * Renderer Lambda for Clara.
+ * Renderer Lambda for Qlara.
  *
  * This file is bundled into a self-contained ZIP and deployed as a standard Lambda.
  * It does NOT run in the developer's Node.js — it runs in AWS Lambda.
  *
  * The renderer:
  * 1. Reads the route's _fallback.html from S3
- * 2. Patches the __CLARA_FALLBACK__ placeholder with the actual param value
+ * 2. Patches the __QLARA_FALLBACK__ placeholder with the actual param value
  * 3. Calls the developer's metaDataGenerator to fetch metadata from the data source
  * 4. Patches <title>, <meta> tags, and RSC flight data with real metadata
  * 5. Uploads the final SEO-complete HTML to S3 for future requests
@@ -17,44 +17,44 @@
 
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import type {
-  ClaraMetadata,
-  ClaraOpenGraph,
-  ClaraOpenGraphBase,
-  ClaraOGImage,
-  ClaraOGImageDescriptor,
-  ClaraOGAudio,
-  ClaraOGAudioDescriptor,
-  ClaraOGVideo,
-  ClaraOGVideoDescriptor,
-  ClaraTwitter,
-  ClaraTwitterImage,
-  ClaraTwitterImageDescriptor,
-  ClaraRobots,
-  ClaraRobotsInfo,
-  ClaraAlternateURLs,
-  ClaraAlternateLinkDescriptor,
-  ClaraIcons,
-  ClaraIcon,
-  ClaraIconDescriptor,
-  ClaraVerification,
-  ClaraAppleWebApp,
-  ClaraFormatDetection,
-  ClaraFacebook,
-  ClaraPinterest,
-  ClaraAppLinks,
-  ClaraAppLinksApple,
-  ClaraAppLinksAndroid,
-  ClaraAppLinksWindows,
-  ClaraAppLinksWeb,
-  ClaraAuthor,
+  QlaraMetadata,
+  QlaraOpenGraph,
+  QlaraOpenGraphBase,
+  QlaraOGImage,
+  QlaraOGImageDescriptor,
+  QlaraOGAudio,
+  QlaraOGAudioDescriptor,
+  QlaraOGVideo,
+  QlaraOGVideoDescriptor,
+  QlaraTwitter,
+  QlaraTwitterImage,
+  QlaraTwitterImageDescriptor,
+  QlaraRobots,
+  QlaraRobotsInfo,
+  QlaraAlternateURLs,
+  QlaraAlternateLinkDescriptor,
+  QlaraIcons,
+  QlaraIcon,
+  QlaraIconDescriptor,
+  QlaraVerification,
+  QlaraAppleWebApp,
+  QlaraFormatDetection,
+  QlaraFacebook,
+  QlaraPinterest,
+  QlaraAppLinks,
+  QlaraAppLinksApple,
+  QlaraAppLinksAndroid,
+  QlaraAppLinksWindows,
+  QlaraAppLinksWeb,
+  QlaraAuthor,
 } from '../../types.js';
 
 // The routes module is resolved by esbuild at deploy time.
 // esbuild's `alias` option maps this import to the developer's route file.
-// At bundle time: '__clara_routes__' → './clara.routes.ts' (or wherever the dev put it)
+// At bundle time: '__qlara_routes__' → './qlara.routes.ts' (or wherever the dev put it)
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at bundle time by esbuild alias
-import routes from '__clara_routes__';
+import routes from '__qlara_routes__';
 
 interface RendererEvent {
   /** The request URI, e.g. '/product/42' */
@@ -74,7 +74,7 @@ interface RendererResult {
   html?: string;
 }
 
-const FALLBACK_PLACEHOLDER = '__CLARA_FALLBACK__';
+const FALLBACK_PLACEHOLDER = '__QLARA_FALLBACK__';
 
 /**
  * Derive the S3 key for a rendered page.
@@ -120,7 +120,7 @@ function toStringArray(val: string | string[] | undefined): string[] {
 
 // ── Robots string builder ────────────────────────────────────────
 
-function robotsInfoToString(info: ClaraRobotsInfo): string {
+function robotsInfoToString(info: QlaraRobotsInfo): string {
   const parts: string[] = [];
   if (info.index === true) parts.push('index');
   if (info.index === false) parts.push('noindex');
@@ -140,9 +140,9 @@ function robotsInfoToString(info: ClaraRobotsInfo): string {
   return parts.join(', ');
 }
 
-// ── metadataToHtml: convert ClaraMetadata → HTML tag strings ─────
+// ── metadataToHtml: convert QlaraMetadata → HTML tag strings ─────
 
-function metadataToHtml(metadata: ClaraMetadata): string[] {
+function metadataToHtml(metadata: QlaraMetadata): string[] {
   const tags: string[] = [];
 
   const meta = (name: string, content: string) =>
@@ -239,7 +239,7 @@ function metadataToHtml(metadata: ClaraMetadata): string[] {
 
   // Icons
   if (metadata.icons) {
-    let icons: ClaraIcons;
+    let icons: QlaraIcons;
     if (typeof metadata.icons === 'string') {
       icons = { icon: [metadata.icons] };
     } else if (Array.isArray(metadata.icons)) {
@@ -248,7 +248,7 @@ function metadataToHtml(metadata: ClaraMetadata): string[] {
       icons = metadata.icons;
     }
 
-    const emitIcon = (icon: ClaraIcon, defaultRel: string) => {
+    const emitIcon = (icon: QlaraIcon, defaultRel: string) => {
       if (typeof icon === 'string') {
         tags.push(link(defaultRel, icon));
       } else {
@@ -489,14 +489,14 @@ function metadataToHtml(metadata: ClaraMetadata): string[] {
   // App Links
   if (metadata.appLinks) {
     const al = metadata.appLinks;
-    const emitApple = (platform: string, items: ClaraAppLinksApple[]) => {
+    const emitApple = (platform: string, items: QlaraAppLinksApple[]) => {
       for (const item of items) {
         tags.push(prop(`al:${platform}:url`, item.url));
         if (item.app_store_id) tags.push(prop(`al:${platform}:app_store_id`, String(item.app_store_id)));
         if (item.app_name) tags.push(prop(`al:${platform}:app_name`, item.app_name));
       }
     };
-    const emitAndroid = (items: ClaraAppLinksAndroid[]) => {
+    const emitAndroid = (items: QlaraAppLinksAndroid[]) => {
       for (const item of items) {
         tags.push(prop('al:android:package', item.package));
         if (item.url) tags.push(prop('al:android:url', item.url));
@@ -504,14 +504,14 @@ function metadataToHtml(metadata: ClaraMetadata): string[] {
         if (item.app_name) tags.push(prop('al:android:app_name', item.app_name));
       }
     };
-    const emitWindows = (platform: string, items: ClaraAppLinksWindows[]) => {
+    const emitWindows = (platform: string, items: QlaraAppLinksWindows[]) => {
       for (const item of items) {
         tags.push(prop(`al:${platform}:url`, item.url));
         if (item.app_id) tags.push(prop(`al:${platform}:app_id`, item.app_id));
         if (item.app_name) tags.push(prop(`al:${platform}:app_name`, item.app_name));
       }
     };
-    const emitWeb = (items: ClaraAppLinksWeb[]) => {
+    const emitWeb = (items: QlaraAppLinksWeb[]) => {
       for (const item of items) {
         tags.push(prop('al:web:url', item.url));
         if (item.should_fallback !== undefined) {
@@ -555,7 +555,7 @@ function metadataToHtml(metadata: ClaraMetadata): string[] {
  * Patch the HTML with real metadata from the metaDataGenerator.
  * This produces output identical to what the framework generates at build time.
  */
-function patchMetadata(html: string, metadata: ClaraMetadata): string {
+function patchMetadata(html: string, metadata: QlaraMetadata): string {
   let patched = html;
 
   // 1. Update <title> tag
@@ -564,12 +564,12 @@ function patchMetadata(html: string, metadata: ClaraMetadata): string {
     `<title>${escapeHtml(metadata.title)}</title>`
   );
 
-  // 2. Remove existing Clara-managed tags broadly.
-  //    Meta tags with name= or property= attributes that Clara generates.
+  // 2. Remove existing Qlara-managed tags broadly.
+  //    Meta tags with name= or property= attributes that Qlara generates.
   patched = patched.replace(/<meta\s+(?:name|property)="(?:description|application-name|generator|creator|publisher|category|classification|abstract|referrer|keywords|author|robots|googlebot|og:[^"]*|twitter:[^"]*|fb:[^"]*|al:[^"]*|google-site-verification|y_key|yandex-verification|me|apple-mobile-web-app-[^"]*|format-detection|apple-itunes-app|pinterest-rich-pin)"\s+content="[^"]*"\s*\/?>/g, '');
   //    Also match content-first ordering: <meta content="..." name="..."/>
   patched = patched.replace(/<meta\s+content="[^"]*"\s+(?:name|property)="(?:description|application-name|generator|creator|publisher|category|classification|abstract|referrer|keywords|author|robots|googlebot|og:[^"]*|twitter:[^"]*|fb:[^"]*|al:[^"]*|google-site-verification|y_key|yandex-verification|me|apple-mobile-web-app-[^"]*|format-detection|apple-itunes-app|pinterest-rich-pin)"\s*\/?>/g, '');
-  //    Link tags that Clara manages
+  //    Link tags that Qlara manages
   patched = patched.replace(/<link\s+rel="(?:canonical|alternate|author|icon|shortcut icon|apple-touch-icon|apple-touch-startup-image|manifest|archives|assets|bookmarks|prev|next)"[^>]*\/?>/g, '');
 
   // 3. Generate and inject all meta/link tags after </title>
@@ -595,11 +595,11 @@ function patchMetadata(html: string, metadata: ClaraMetadata): string {
 }
 
 /**
- * Build RSC flight data metadata entries from ClaraMetadata.
+ * Build RSC flight data metadata entries from QlaraMetadata.
  * Each entry is a serialized React element in the RSC wire format.
  * Uses auto-incrementing keys for element IDs.
  */
-function metadataToRscEntries(metadata: ClaraMetadata): string {
+function metadataToRscEntries(metadata: QlaraMetadata): string {
   const q = '\\"'; // escaped quote as it appears in the HTML script
   let idx = 0;
 

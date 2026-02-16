@@ -3,12 +3,12 @@
 // metadata that modern frameworks (Next.js, etc.) can generate.
 // All fields are optional except `title`.
 
-export interface ClaraAuthor {
+export interface QlaraAuthor {
   name?: string;
   url?: string;
 }
 
-export type ClaraReferrer =
+export type QlaraReferrer =
   | 'no-referrer'
   | 'origin'
   | 'no-referrer-when-downgrade'
@@ -19,7 +19,7 @@ export type ClaraReferrer =
 
 // ── Robots ───────────────────────────────────────────────────────
 
-export interface ClaraRobotsInfo {
+export interface QlaraRobotsInfo {
   index?: boolean;
   follow?: boolean;
   noarchive?: boolean;
@@ -35,27 +35,27 @@ export interface ClaraRobotsInfo {
   'max-snippet'?: number;
 }
 
-export type ClaraRobots = string | (ClaraRobotsInfo & {
-  googleBot?: string | ClaraRobotsInfo;
+export type QlaraRobots = string | (QlaraRobotsInfo & {
+  googleBot?: string | QlaraRobotsInfo;
 });
 
 // ── Alternates ───────────────────────────────────────────────────
 
-export interface ClaraAlternateLinkDescriptor {
+export interface QlaraAlternateLinkDescriptor {
   title?: string;
   url: string;
 }
 
-export interface ClaraAlternateURLs {
-  canonical?: string | ClaraAlternateLinkDescriptor;
-  languages?: Record<string, string | ClaraAlternateLinkDescriptor[]>;
-  media?: Record<string, string | ClaraAlternateLinkDescriptor[]>;
-  types?: Record<string, string | ClaraAlternateLinkDescriptor[]>;
+export interface QlaraAlternateURLs {
+  canonical?: string | QlaraAlternateLinkDescriptor;
+  languages?: Record<string, string | QlaraAlternateLinkDescriptor[]>;
+  media?: Record<string, string | QlaraAlternateLinkDescriptor[]>;
+  types?: Record<string, string | QlaraAlternateLinkDescriptor[]>;
 }
 
 // ── Icons ────────────────────────────────────────────────────────
 
-export interface ClaraIconDescriptor {
+export interface QlaraIconDescriptor {
   url: string;
   type?: string;
   sizes?: string;
@@ -65,18 +65,18 @@ export interface ClaraIconDescriptor {
   fetchPriority?: 'high' | 'low' | 'auto';
 }
 
-export type ClaraIcon = string | ClaraIconDescriptor;
+export type QlaraIcon = string | QlaraIconDescriptor;
 
-export interface ClaraIcons {
-  icon?: ClaraIcon | ClaraIcon[];
-  shortcut?: ClaraIcon | ClaraIcon[];
-  apple?: ClaraIcon | ClaraIcon[];
-  other?: ClaraIconDescriptor | ClaraIconDescriptor[];
+export interface QlaraIcons {
+  icon?: QlaraIcon | QlaraIcon[];
+  shortcut?: QlaraIcon | QlaraIcon[];
+  apple?: QlaraIcon | QlaraIcon[];
+  other?: QlaraIconDescriptor | QlaraIconDescriptor[];
 }
 
 // ── Open Graph ───────────────────────────────────────────────────
 
-export interface ClaraOGImageDescriptor {
+export interface QlaraOGImageDescriptor {
   url: string;
   secureUrl?: string;
   alt?: string;
@@ -85,17 +85,17 @@ export interface ClaraOGImageDescriptor {
   height?: string | number;
 }
 
-export type ClaraOGImage = string | ClaraOGImageDescriptor;
+export type QlaraOGImage = string | QlaraOGImageDescriptor;
 
-export interface ClaraOGAudioDescriptor {
+export interface QlaraOGAudioDescriptor {
   url: string;
   secureUrl?: string;
   type?: string;
 }
 
-export type ClaraOGAudio = string | ClaraOGAudioDescriptor;
+export type QlaraOGAudio = string | QlaraOGAudioDescriptor;
 
-export interface ClaraOGVideoDescriptor {
+export interface QlaraOGVideoDescriptor {
   url: string;
   secureUrl?: string;
   type?: string;
@@ -103,9 +103,9 @@ export interface ClaraOGVideoDescriptor {
   height?: string | number;
 }
 
-export type ClaraOGVideo = string | ClaraOGVideoDescriptor;
+export type QlaraOGVideo = string | QlaraOGVideoDescriptor;
 
-export interface ClaraOpenGraphBase {
+export interface QlaraOpenGraphBase {
   title?: string;
   description?: string;
   url?: string;
@@ -118,16 +118,16 @@ export interface ClaraOpenGraphBase {
   faxNumbers?: string | string[];
   countryName?: string;
   ttl?: number;
-  images?: ClaraOGImage | ClaraOGImage[];
-  audio?: ClaraOGAudio | ClaraOGAudio[];
-  videos?: ClaraOGVideo | ClaraOGVideo[];
+  images?: QlaraOGImage | QlaraOGImage[];
+  audio?: QlaraOGAudio | QlaraOGAudio[];
+  videos?: QlaraOGVideo | QlaraOGVideo[];
 }
 
-export interface ClaraOpenGraphWebsite extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphWebsite extends QlaraOpenGraphBase {
   type?: 'website';
 }
 
-export interface ClaraOpenGraphArticle extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphArticle extends QlaraOpenGraphBase {
   type: 'article';
   publishedTime?: string;
   modifiedTime?: string;
@@ -137,7 +137,7 @@ export interface ClaraOpenGraphArticle extends ClaraOpenGraphBase {
   tags?: string | string[];
 }
 
-export interface ClaraOpenGraphBook extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphBook extends QlaraOpenGraphBase {
   type: 'book';
   isbn?: string;
   releaseDate?: string;
@@ -145,7 +145,7 @@ export interface ClaraOpenGraphBook extends ClaraOpenGraphBase {
   tags?: string | string[];
 }
 
-export interface ClaraOpenGraphProfile extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphProfile extends QlaraOpenGraphBase {
   type: 'profile';
   firstName?: string;
   lastName?: string;
@@ -153,32 +153,32 @@ export interface ClaraOpenGraphProfile extends ClaraOpenGraphBase {
   gender?: string;
 }
 
-export interface ClaraOpenGraphMusicSong extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphMusicSong extends QlaraOpenGraphBase {
   type: 'music.song';
   duration?: number;
   albums?: string | string[];
   musicians?: string | string[];
 }
 
-export interface ClaraOpenGraphMusicAlbum extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphMusicAlbum extends QlaraOpenGraphBase {
   type: 'music.album';
   songs?: string | string[];
   musicians?: string | string[];
   releaseDate?: string;
 }
 
-export interface ClaraOpenGraphMusicPlaylist extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphMusicPlaylist extends QlaraOpenGraphBase {
   type: 'music.playlist';
   songs?: string | string[];
   creators?: string | string[];
 }
 
-export interface ClaraOpenGraphMusicRadioStation extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphMusicRadioStation extends QlaraOpenGraphBase {
   type: 'music.radio_station';
   creators?: string | string[];
 }
 
-export interface ClaraOpenGraphVideoMovie extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphVideoMovie extends QlaraOpenGraphBase {
   type: 'video.movie';
   actors?: string | string[];
   directors?: string | string[];
@@ -188,7 +188,7 @@ export interface ClaraOpenGraphVideoMovie extends ClaraOpenGraphBase {
   tags?: string | string[];
 }
 
-export interface ClaraOpenGraphVideoEpisode extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphVideoEpisode extends QlaraOpenGraphBase {
   type: 'video.episode';
   actors?: string | string[];
   directors?: string | string[];
@@ -199,31 +199,31 @@ export interface ClaraOpenGraphVideoEpisode extends ClaraOpenGraphBase {
   series?: string;
 }
 
-export interface ClaraOpenGraphVideoTVShow extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphVideoTVShow extends QlaraOpenGraphBase {
   type: 'video.tv_show';
 }
 
-export interface ClaraOpenGraphVideoOther extends ClaraOpenGraphBase {
+export interface QlaraOpenGraphVideoOther extends QlaraOpenGraphBase {
   type: 'video.other';
 }
 
-export type ClaraOpenGraph =
-  | ClaraOpenGraphWebsite
-  | ClaraOpenGraphArticle
-  | ClaraOpenGraphBook
-  | ClaraOpenGraphProfile
-  | ClaraOpenGraphMusicSong
-  | ClaraOpenGraphMusicAlbum
-  | ClaraOpenGraphMusicPlaylist
-  | ClaraOpenGraphMusicRadioStation
-  | ClaraOpenGraphVideoMovie
-  | ClaraOpenGraphVideoEpisode
-  | ClaraOpenGraphVideoTVShow
-  | ClaraOpenGraphVideoOther;
+export type QlaraOpenGraph =
+  | QlaraOpenGraphWebsite
+  | QlaraOpenGraphArticle
+  | QlaraOpenGraphBook
+  | QlaraOpenGraphProfile
+  | QlaraOpenGraphMusicSong
+  | QlaraOpenGraphMusicAlbum
+  | QlaraOpenGraphMusicPlaylist
+  | QlaraOpenGraphMusicRadioStation
+  | QlaraOpenGraphVideoMovie
+  | QlaraOpenGraphVideoEpisode
+  | QlaraOpenGraphVideoTVShow
+  | QlaraOpenGraphVideoOther;
 
 // ── Twitter ──────────────────────────────────────────────────────
 
-export interface ClaraTwitterImageDescriptor {
+export interface QlaraTwitterImageDescriptor {
   url: string;
   alt?: string;
   secureUrl?: string;
@@ -232,16 +232,16 @@ export interface ClaraTwitterImageDescriptor {
   height?: string | number;
 }
 
-export type ClaraTwitterImage = string | ClaraTwitterImageDescriptor;
+export type QlaraTwitterImage = string | QlaraTwitterImageDescriptor;
 
-export interface ClaraTwitterPlayerDescriptor {
+export interface QlaraTwitterPlayerDescriptor {
   playerUrl: string;
   streamUrl: string;
   width: number;
   height: number;
 }
 
-export interface ClaraTwitterAppDescriptor {
+export interface QlaraTwitterAppDescriptor {
   id: {
     iphone?: string | number;
     ipad?: string | number;
@@ -255,44 +255,44 @@ export interface ClaraTwitterAppDescriptor {
   name?: string;
 }
 
-export interface ClaraTwitterBase {
+export interface QlaraTwitterBase {
   site?: string;
   siteId?: string;
   creator?: string;
   creatorId?: string;
   title?: string;
   description?: string;
-  images?: ClaraTwitterImage | ClaraTwitterImage[];
+  images?: QlaraTwitterImage | QlaraTwitterImage[];
 }
 
-export interface ClaraTwitterSummary extends ClaraTwitterBase {
+export interface QlaraTwitterSummary extends QlaraTwitterBase {
   card: 'summary';
 }
 
-export interface ClaraTwitterSummaryLargeImage extends ClaraTwitterBase {
+export interface QlaraTwitterSummaryLargeImage extends QlaraTwitterBase {
   card: 'summary_large_image';
 }
 
-export interface ClaraTwitterPlayer extends ClaraTwitterBase {
+export interface QlaraTwitterPlayer extends QlaraTwitterBase {
   card: 'player';
-  players: ClaraTwitterPlayerDescriptor | ClaraTwitterPlayerDescriptor[];
+  players: QlaraTwitterPlayerDescriptor | QlaraTwitterPlayerDescriptor[];
 }
 
-export interface ClaraTwitterApp extends ClaraTwitterBase {
+export interface QlaraTwitterApp extends QlaraTwitterBase {
   card: 'app';
-  app: ClaraTwitterAppDescriptor;
+  app: QlaraTwitterAppDescriptor;
 }
 
-export type ClaraTwitter =
-  | ClaraTwitterBase
-  | ClaraTwitterSummary
-  | ClaraTwitterSummaryLargeImage
-  | ClaraTwitterPlayer
-  | ClaraTwitterApp;
+export type QlaraTwitter =
+  | QlaraTwitterBase
+  | QlaraTwitterSummary
+  | QlaraTwitterSummaryLargeImage
+  | QlaraTwitterPlayer
+  | QlaraTwitterApp;
 
 // ── Verification ─────────────────────────────────────────────────
 
-export interface ClaraVerification {
+export interface QlaraVerification {
   google?: string | string[];
   yahoo?: string | string[];
   yandex?: string | string[];
@@ -302,23 +302,23 @@ export interface ClaraVerification {
 
 // ── Apple Web App ────────────────────────────────────────────────
 
-export interface ClaraAppleImageDescriptor {
+export interface QlaraAppleImageDescriptor {
   url: string;
   media?: string;
 }
 
-export type ClaraAppleImage = string | ClaraAppleImageDescriptor;
+export type QlaraAppleImage = string | QlaraAppleImageDescriptor;
 
-export interface ClaraAppleWebApp {
+export interface QlaraAppleWebApp {
   capable?: boolean;
   title?: string;
-  startupImage?: ClaraAppleImage | ClaraAppleImage[];
+  startupImage?: QlaraAppleImage | QlaraAppleImage[];
   statusBarStyle?: 'default' | 'black' | 'black-translucent';
 }
 
 // ── Format Detection ─────────────────────────────────────────────
 
-export interface ClaraFormatDetection {
+export interface QlaraFormatDetection {
   telephone?: boolean;
   date?: boolean;
   address?: boolean;
@@ -328,73 +328,73 @@ export interface ClaraFormatDetection {
 
 // ── iTunes App ───────────────────────────────────────────────────
 
-export interface ClaraItunesApp {
+export interface QlaraItunesApp {
   appId: string;
   appArgument?: string;
 }
 
 // ── Facebook ─────────────────────────────────────────────────────
 
-export interface ClaraFacebook {
+export interface QlaraFacebook {
   appId?: string;
   admins?: string | string[];
 }
 
 // ── Pinterest ────────────────────────────────────────────────────
 
-export interface ClaraPinterest {
+export interface QlaraPinterest {
   richPin?: string | boolean;
 }
 
 // ── App Links ────────────────────────────────────────────────────
 
-export interface ClaraAppLinksApple {
+export interface QlaraAppLinksApple {
   url: string;
   app_store_id?: string | number;
   app_name?: string;
 }
 
-export interface ClaraAppLinksAndroid {
+export interface QlaraAppLinksAndroid {
   package: string;
   url?: string;
   class?: string;
   app_name?: string;
 }
 
-export interface ClaraAppLinksWindows {
+export interface QlaraAppLinksWindows {
   url: string;
   app_id?: string;
   app_name?: string;
 }
 
-export interface ClaraAppLinksWeb {
+export interface QlaraAppLinksWeb {
   url: string;
   should_fallback?: boolean;
 }
 
-export interface ClaraAppLinks {
-  ios?: ClaraAppLinksApple | ClaraAppLinksApple[];
-  iphone?: ClaraAppLinksApple | ClaraAppLinksApple[];
-  ipad?: ClaraAppLinksApple | ClaraAppLinksApple[];
-  android?: ClaraAppLinksAndroid | ClaraAppLinksAndroid[];
-  windows_phone?: ClaraAppLinksWindows | ClaraAppLinksWindows[];
-  windows?: ClaraAppLinksWindows | ClaraAppLinksWindows[];
-  windows_universal?: ClaraAppLinksWindows | ClaraAppLinksWindows[];
-  web?: ClaraAppLinksWeb | ClaraAppLinksWeb[];
+export interface QlaraAppLinks {
+  ios?: QlaraAppLinksApple | QlaraAppLinksApple[];
+  iphone?: QlaraAppLinksApple | QlaraAppLinksApple[];
+  ipad?: QlaraAppLinksApple | QlaraAppLinksApple[];
+  android?: QlaraAppLinksAndroid | QlaraAppLinksAndroid[];
+  windows_phone?: QlaraAppLinksWindows | QlaraAppLinksWindows[];
+  windows?: QlaraAppLinksWindows | QlaraAppLinksWindows[];
+  windows_universal?: QlaraAppLinksWindows | QlaraAppLinksWindows[];
+  web?: QlaraAppLinksWeb | QlaraAppLinksWeb[];
 }
 
 // ── Main Metadata Interface ──────────────────────────────────────
 
 /** Metadata returned by a route's metaDataGenerator function. */
-export interface ClaraMetadata {
+export interface QlaraMetadata {
   // Basic metadata
   title: string;
   description?: string;
   applicationName?: string;
-  authors?: ClaraAuthor | ClaraAuthor[];
+  authors?: QlaraAuthor | QlaraAuthor[];
   generator?: string;
   keywords?: string | string[];
-  referrer?: ClaraReferrer;
+  referrer?: QlaraReferrer;
   creator?: string;
   publisher?: string;
   category?: string;
@@ -402,40 +402,40 @@ export interface ClaraMetadata {
   abstract?: string;
 
   // Robots
-  robots?: ClaraRobots;
+  robots?: QlaraRobots;
 
   // Alternates (canonical, hreflang, etc.)
-  alternates?: ClaraAlternateURLs;
+  alternates?: QlaraAlternateURLs;
 
   // Icons
-  icons?: string | ClaraIcon[] | ClaraIcons;
+  icons?: string | QlaraIcon[] | QlaraIcons;
 
   // Open Graph
-  openGraph?: ClaraOpenGraph;
+  openGraph?: QlaraOpenGraph;
 
   // Twitter
-  twitter?: ClaraTwitter;
+  twitter?: QlaraTwitter;
 
   // Verification
-  verification?: ClaraVerification;
+  verification?: QlaraVerification;
 
   // Apple
-  appleWebApp?: boolean | ClaraAppleWebApp;
+  appleWebApp?: boolean | QlaraAppleWebApp;
 
   // Format detection
-  formatDetection?: ClaraFormatDetection;
+  formatDetection?: QlaraFormatDetection;
 
   // iTunes
-  itunes?: ClaraItunesApp;
+  itunes?: QlaraItunesApp;
 
   // Facebook
-  facebook?: ClaraFacebook;
+  facebook?: QlaraFacebook;
 
   // Pinterest
-  pinterest?: ClaraPinterest;
+  pinterest?: QlaraPinterest;
 
   // App links
-  appLinks?: ClaraAppLinks;
+  appLinks?: QlaraAppLinks;
 
   // Web app manifest
   manifest?: string;
@@ -463,14 +463,14 @@ export interface ClaraMetadata {
  * @param params - The route parameters, e.g. { id: '42' } for /product/:id
  * @returns Metadata for the page, or null if the page doesn't exist
  */
-export type ClaraMetaDataGenerator = (params: Record<string, string>) => Promise<ClaraMetadata | null>;
+export type QlaraMetaDataGenerator = (params: Record<string, string>) => Promise<QlaraMetadata | null>;
 
 /** A single route definition with its pattern and metadata generator. */
-export interface ClaraRouteDefinition {
+export interface QlaraRouteDefinition {
   /** Dynamic route pattern, e.g. '/product/:id' */
   route: string;
   /** Function that fetches metadata for this route from the data source */
-  metaDataGenerator: ClaraMetaDataGenerator;
+  metaDataGenerator: QlaraMetaDataGenerator;
 }
 
 /**
@@ -478,8 +478,8 @@ export interface ClaraRouteDefinition {
  *
  * Example:
  * ```typescript
- * import type { ClaraRoutes } from 'clara';
- * const routes: ClaraRoutes = [
+ * import type { QlaraRoutes } from 'qlara';
+ * const routes: QlaraRoutes = [
  *   {
  *     route: '/product/:id',
  *     metaDataGenerator: async (params) => {
@@ -492,36 +492,36 @@ export interface ClaraRouteDefinition {
  * export default routes;
  * ```
  */
-export type ClaraRoutes = ClaraRouteDefinition[];
+export type QlaraRoutes = QlaraRouteDefinition[];
 
-export interface ClaraRoute {
+export interface QlaraRoute {
   /** Dynamic route pattern, e.g. '/product/:id' */
   pattern: string;
 }
 
-export interface ClaraPluginConfig {
+export interface QlaraPluginConfig {
   /**
    * Path to a file that defines dynamic routes and their metadata generators.
    * Each entry has a `route` pattern and a `metaDataGenerator` function.
    *
-   * The file should `export default` a `ClaraRoutes` array.
+   * The file should `export default` a `QlaraRoutes` array.
    * Route patterns are extracted from the `route` properties automatically.
    *
-   * Example: `'./clara.routes.ts'`
+   * Example: `'./qlara.routes.ts'`
    */
   routeFile: string;
-  provider: ClaraProvider;
+  provider: QlaraProvider;
   /** Env var names to forward to the renderer Lambda (values read from process.env at build time) */
   env?: string[];
 }
 
-export interface ClaraProvider {
+export interface QlaraProvider {
   name: string;
   /** The serializable config passed to the provider factory (e.g. { region: 'eu-west-1' }) */
   config: Record<string, unknown>;
-  setup(config: ClaraDeployConfig): Promise<ProviderResources>;
-  deploy(config: ClaraDeployConfig, resources: ProviderResources): Promise<void>;
-  exists(config: ClaraDeployConfig): Promise<ProviderResources | null>;
+  setup(config: QlaraDeployConfig): Promise<ProviderResources>;
+  deploy(config: QlaraDeployConfig, resources: ProviderResources): Promise<void>;
+  exists(config: QlaraDeployConfig): Promise<ProviderResources | null>;
   teardown(resources: ProviderResources): Promise<void>;
 }
 
@@ -530,9 +530,9 @@ export interface ProviderResources {
   [key: string]: unknown;
 }
 
-/** Serialized config written to .clara/config.json by the build plugin. Read by `clara deploy`. */
-export interface ClaraDeployConfig {
-  routes: ClaraRoute[];
+/** Serialized config written to .qlara/config.json by the build plugin. Read by `qlara deploy`. */
+export interface QlaraDeployConfig {
+  routes: QlaraRoute[];
   provider: {
     name: string;
     [key: string]: unknown;
@@ -544,7 +544,7 @@ export interface ClaraDeployConfig {
   env?: Record<string, string>;
 }
 
-export interface ClaraManifest {
+export interface QlaraManifest {
   version: 1;
   routes: ManifestRoute[];
 }

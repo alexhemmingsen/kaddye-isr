@@ -1,11 +1,11 @@
 /**
- * Lambda bundling utilities for Clara.
+ * Lambda bundling utilities for Qlara.
  *
  * Bundles the edge handler and renderer into self-contained ZIP files
  * ready for deployment to AWS Lambda.
  *
  * At deploy time, esbuild resolves the entry points from the installed
- * clara package's source (or dist). The entry point paths are resolved
+ * qlara package's source (or dist). The entry point paths are resolved
  * relative to this file's location.
  */
 
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import archiver from 'archiver';
 import { Writable } from 'node:stream';
 
-const BUNDLE_DIR = join('.clara', 'bundles');
+const BUNDLE_DIR = join('.qlara', 'bundles');
 
 /**
  * Resolve the directory of this module at runtime.
@@ -102,9 +102,9 @@ export async function bundleEdgeHandler(
     outfile,
     minify: true,
     define: {
-      __CLARA_BUCKET_NAME__: JSON.stringify(config.bucketName),
-      __CLARA_RENDERER_ARN__: JSON.stringify(config.rendererArn),
-      __CLARA_REGION__: JSON.stringify(config.region),
+      __QLARA_BUCKET_NAME__: JSON.stringify(config.bucketName),
+      __QLARA_RENDERER_ARN__: JSON.stringify(config.rendererArn),
+      __QLARA_REGION__: JSON.stringify(config.region),
     },
     // Bundle everything — Lambda@Edge must be self-contained
     external: [],
@@ -121,7 +121,7 @@ export async function bundleEdgeHandler(
  * No browser or Chromium needed.
  *
  * The developer's route file is bundled into the renderer via esbuild's
- * `alias` option: the renderer imports from '__clara_routes__', which
+ * `alias` option: the renderer imports from '__qlara_routes__', which
  * esbuild resolves to the actual route file path.
  *
  * @param routeFile - Absolute path to the developer's route file
@@ -130,18 +130,18 @@ export async function bundleRenderer(routeFile?: string): Promise<Buffer> {
   mkdirSync(BUNDLE_DIR, { recursive: true });
   const outfile = join(BUNDLE_DIR, 'renderer.js');
 
-  // Map the virtual import '__clara_routes__' to the developer's route file.
+  // Map the virtual import '__qlara_routes__' to the developer's route file.
   // If no route file is provided, map to an empty module.
   const alias: Record<string, string> = {};
   if (routeFile) {
-    alias['__clara_routes__'] = resolve(routeFile);
+    alias['__qlara_routes__'] = resolve(routeFile);
   } else {
     // Create a no-op routes module inline via esbuild stdin won't work here,
     // so we create a temporary file
-    const noopPath = join(BUNDLE_DIR, '__clara_noop_routes.js');
+    const noopPath = join(BUNDLE_DIR, '__qlara_noop_routes.js');
     const { writeFileSync } = await import('node:fs');
     writeFileSync(noopPath, 'module.exports = { default: [] };');
-    alias['__clara_routes__'] = resolve(noopPath);
+    alias['__qlara_routes__'] = resolve(noopPath);
   }
 
   await build({

@@ -1,13 +1,13 @@
 import type { NextConfig } from 'next';
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { ClaraPluginConfig, ClaraDeployConfig, ClaraRoute } from '../types.js';
+import type { QlaraPluginConfig, QlaraDeployConfig, QlaraRoute } from '../types.js';
 import { validateConfig } from '../config.js';
 import { buildManifest } from '../routes.js';
 
-const CLARA_DIR = '.clara';
+const QLARA_DIR = '.qlara';
 const CONFIG_FILE = 'config.json';
-const LOCK_FILE = '.clara/.build-lock';
+const LOCK_FILE = '.qlara/.build-lock';
 
 /**
  * Check if another process already logged during this build.
@@ -15,7 +15,7 @@ const LOCK_FILE = '.clara/.build-lock';
  * This prevents log spam when Next.js evaluates the config in multiple workers.
  */
 function acquireLogLock(): boolean {
-  mkdirSync(CLARA_DIR, { recursive: true });
+  mkdirSync(QLARA_DIR, { recursive: true });
 
   // 10-second window — all workers during a single `next build` invocation
   // fall within the same window. A new `next build` (>10s later) logs again.
@@ -47,10 +47,10 @@ function acquireLogLock(): boolean {
  *
  * This avoids importing the file (which may have side effects or dependencies).
  */
-function extractRoutesFromRouteFile(routeFilePath: string): ClaraRoute[] {
+function extractRoutesFromRouteFile(routeFilePath: string): QlaraRoute[] {
   const absPath = resolve(routeFilePath);
   if (!existsSync(absPath)) {
-    throw new Error(`[clara] Route file not found: ${absPath}`);
+    throw new Error(`[qlara] Route file not found: ${absPath}`);
   }
 
   const source = readFileSync(absPath, 'utf-8');
@@ -69,7 +69,7 @@ function extractRoutesFromRouteFile(routeFilePath: string): ClaraRoute[] {
 
   if (patterns.length === 0) {
     throw new Error(
-      `[clara] No route patterns found in ${routeFilePath}. ` +
+      `[qlara] No route patterns found in ${routeFilePath}. ` +
       `Each entry should have a route property like '/product/:id'.`
     );
   }
@@ -78,48 +78,48 @@ function extractRoutesFromRouteFile(routeFilePath: string): ClaraRoute[] {
 }
 
 /**
- * Wrap a Next.js config with Clara.
+ * Wrap a Next.js config with Qlara.
  *
  * During `next build`, this writes two files:
- * - `public/clara-manifest.json` — route patterns for the edge handler (copied to out/ by Next.js)
- * - `.clara/config.json` — deploy config for `clara deploy` to read
+ * - `public/qlara-manifest.json` — route patterns for the edge handler (copied to out/ by Next.js)
+ * - `.qlara/config.json` — deploy config for `qlara deploy` to read
  *
  * Route patterns are extracted automatically from the route file.
  *
  * The build itself is unaffected — no deploy, no AWS calls, no side effects.
- * Run `clara deploy` separately to provision infrastructure and deploy.
+ * Run `qlara deploy` separately to provision infrastructure and deploy.
  *
  * Usage:
  * ```typescript
- * import { withClara } from 'clara/next';
- * import { aws } from 'clara/aws';
+ * import { withQlara } from 'qlara/next';
+ * import { aws } from 'qlara/aws';
  *
- * export default withClara({
- *   routeFile: './clara.routes.ts',
+ * export default withQlara({
+ *   routeFile: './qlara.routes.ts',
  *   provider: aws(),
  * })({
  *   output: 'export',
  * });
  * ```
  */
-export function withClara(claraConfig: ClaraPluginConfig) {
+export function withQlara(qlaraConfig: QlaraPluginConfig) {
   // Extract routes from the route file
-  const routes = extractRoutesFromRouteFile(claraConfig.routeFile);
+  const routes = extractRoutesFromRouteFile(qlaraConfig.routeFile);
 
-  validateConfig(claraConfig, routes);
+  validateConfig(qlaraConfig, routes);
 
   // Write manifest to public/ — Next.js copies public/ to out/ during static export
   const manifest = buildManifest(routes);
   mkdirSync('public', { recursive: true });
   writeFileSync(
-    join('public', 'clara-manifest.json'),
+    join('public', 'qlara-manifest.json'),
     JSON.stringify(manifest, null, 2)
   );
 
   if (acquireLogLock()) {
-    console.log(`[clara] Found ${routes.length} route(s) in ${claraConfig.routeFile}`);
-    console.log('[clara] Manifest written to public/clara-manifest.json');
-    console.log('[clara] Run `clara deploy` after building to provision and deploy.');
+    console.log(`[qlara] Found ${routes.length} route(s) in ${qlaraConfig.routeFile}`);
+    console.log('[qlara] Manifest written to public/qlara-manifest.json');
+    console.log('[qlara] Run `qlara deploy` after building to provision and deploy.');
   }
 
   return (nextConfig: NextConfig): NextConfig => {
@@ -127,9 +127,9 @@ export function withClara(claraConfig: ClaraPluginConfig) {
 
     // Resolve env vars from process.env
     let env: Record<string, string> | undefined;
-    if (claraConfig.env && claraConfig.env.length > 0) {
+    if (qlaraConfig.env && qlaraConfig.env.length > 0) {
       const resolved: Record<string, string> = {};
-      for (const name of claraConfig.env) {
+      for (const name of qlaraConfig.env) {
         const value = process.env[name];
         if (value !== undefined) {
           resolved[name] = value;
@@ -140,21 +140,21 @@ export function withClara(claraConfig: ClaraPluginConfig) {
       }
     }
 
-    // Write deploy config for `clara deploy`
-    const deployConfig: ClaraDeployConfig = {
+    // Write deploy config for `qlara deploy`
+    const deployConfig: QlaraDeployConfig = {
       routes,
       provider: {
-        name: claraConfig.provider.name,
-        ...claraConfig.provider.config,
+        name: qlaraConfig.provider.name,
+        ...qlaraConfig.provider.config,
       },
       outputDir,
-      routeFile: resolve(claraConfig.routeFile),
+      routeFile: resolve(qlaraConfig.routeFile),
       env,
     };
 
-    mkdirSync(CLARA_DIR, { recursive: true });
+    mkdirSync(QLARA_DIR, { recursive: true });
     writeFileSync(
-      join(CLARA_DIR, CONFIG_FILE),
+      join(QLARA_DIR, CONFIG_FILE),
       JSON.stringify(deployConfig, null, 2)
     );
 

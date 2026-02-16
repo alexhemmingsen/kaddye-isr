@@ -1,7 +1,7 @@
 /**
  * Tests for the Lambda@Edge origin-response handler logic.
  *
- * The actual edge-handler.ts uses injected globals (__CLARA_BUCKET_NAME__, etc.)
+ * The actual edge-handler.ts uses injected globals (__QLARA_BUCKET_NAME__, etc.)
  * and module-level AWS SDK clients, making it hard to unit test directly.
  *
  * Instead, we test the handler's decision logic by reimplementing the core flow
@@ -61,7 +61,7 @@ interface CloudFrontEvent {
 
 async function handleEdgeResponse(event: CloudFrontEvent, deps: Deps) {
   const { uri, querystring, responseStatus } = event;
-  const isBypass = querystring.includes('__clara_bypass');
+  const isBypass = querystring.includes('__qlara_bypass');
 
   // 1. File exists → pass through
   if (responseStatus !== 403 && responseStatus !== 404) {
@@ -162,7 +162,7 @@ describe('edge handler logic', () => {
     const result = await handleEdgeResponse(
       {
         uri: '/product/42',
-        querystring: '__clara_bypass=1',
+        querystring: '__qlara_bypass=1',
         responseStatus: 403,
       },
       deps
@@ -180,7 +180,7 @@ describe('edge handler logic', () => {
     const result = await handleEdgeResponse(
       {
         uri: '/product/99',
-        querystring: 'foo=bar&__clara_bypass=1',
+        querystring: 'foo=bar&__qlara_bypass=1',
         responseStatus: 404,
       },
       deps
@@ -198,7 +198,7 @@ describe('edge handler logic', () => {
     const result = await handleEdgeResponse(
       {
         uri: '/product/42',
-        querystring: '__clara_bypass=1',
+        querystring: '__qlara_bypass=1',
         responseStatus: 403,
       },
       deps
