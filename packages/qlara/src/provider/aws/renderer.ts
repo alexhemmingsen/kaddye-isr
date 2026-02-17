@@ -79,6 +79,9 @@ interface RendererResult {
 
 const FALLBACK_PLACEHOLDER = '__QLARA_FALLBACK__';
 
+// Module-scope S3 client — reused across warm invocations (avoids recreating TCP/TLS connections)
+const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+
 /**
  * Derive the S3 key for a rendered page.
  * Matches the Next.js static export convention: /product/42 → product/42.html
@@ -763,9 +766,6 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
   }
 
   const { uri, bucket, routePattern, params } = event;
-  const region = process.env.AWS_REGION || 'us-east-1';
-
-  const s3 = new S3Client({ region });
 
   try {
     // 0. Check if already rendered + read fallback in parallel

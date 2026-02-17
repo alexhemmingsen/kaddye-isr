@@ -36,14 +36,14 @@ function getContentType(filePath: string): string {
   return CONTENT_TYPES[ext] || 'application/octet-stream';
 }
 
-function getCacheControl(key: string): string {
+function getCacheControl(key: string, cacheTtl: number): string {
   // Hashed assets (e.g. _next/static/) — cache forever
   if (key.includes('_next/static/') || key.includes('.chunk.')) {
     return 'public, max-age=31536000, immutable';
   }
-  // HTML files — always revalidate
+  // HTML files — browsers revalidate, CloudFront caches for cacheTtl
   if (key.endsWith('.html')) {
-    return 'public, max-age=0, must-revalidate';
+    return `public, max-age=0, s-maxage=${cacheTtl}, stale-while-revalidate=60`;
   }
   // Everything else — 1 day
   return 'public, max-age=86400';
@@ -107,7 +107,8 @@ async function listAllKeys(client: S3Client, bucketName: string): Promise<Set<st
 export async function syncToS3(
   client: S3Client,
   bucketName: string,
-  buildDir: string
+  buildDir: string,
+  cacheTtl: number = 3600
 ): Promise<{ uploaded: number; deleted: number }> {
   const files = listFiles(buildDir);
   const newKeys = new Set<string>();
@@ -123,7 +124,7 @@ export async function syncToS3(
         newKeys.add(key);
         const body = readFileSync(filePath);
         const contentType = getContentType(filePath);
-        const cacheControl = getCacheControl(key);
+        const cacheControl = getCacheControl(key, cacheTtl);
 
         await client.send(
           new PutObjectCommand({
@@ -201,7 +202,7 @@ export async function putObject(
       Key: key,
       Body: body,
       ContentType: contentType,
-      CacheControl: cacheControl || 'public, max-age=0, must-revalidate',
+      CacheControl: cacheControl || 'public, max-age=0, s-maxage=86400, stale-while-revalidate=60',
     })
   );
 }

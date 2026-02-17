@@ -401,7 +401,7 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
       // 1. Sync build output to S3 (includes the generated fallback pages)
       console.log('[qlara/aws] Syncing build output to S3...');
       const s3 = createS3Client(res.region);
-      const { uploaded, deleted } = await syncToS3(s3, res.bucketName, buildDir);
+      const { uploaded, deleted } = await syncToS3(s3, res.bucketName, buildDir, cacheTtl);
       console.log(`[qlara/aws] Uploaded ${uploaded} files, deleted ${deleted} stale files`);
 
       // 2. Bundle and deploy edge handler
@@ -422,11 +422,12 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
         { FunctionName: res.edgeFunctionArn }
       );
 
-      // Ensure edge handler has adequate timeout (30s for origin-response)
+      // Ensure edge handler has adequate timeout and memory (more memory = more CPU)
       await lambda.send(
         new UpdateFunctionConfigurationCommand({
           FunctionName: res.edgeFunctionArn,
           Timeout: 30,
+          MemorySize: 512,
         })
       );
 
@@ -533,13 +534,13 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
         { FunctionName: res.rendererFunctionArn }
       );
 
-      // 5b. Configure renderer — 256MB is plenty (no Chromium needed)
+      // 5b. Configure renderer — 512MB for faster CPU (no Chromium needed)
       console.log('[qlara/aws] Configuring renderer...');
       await lambda.send(
         new UpdateFunctionConfigurationCommand({
           FunctionName: res.rendererFunctionArn,
           Layers: [],
-          MemorySize: 256,
+          MemorySize: 512,
           Timeout: 30,
           Environment: {
             Variables: config.env ?? {},
