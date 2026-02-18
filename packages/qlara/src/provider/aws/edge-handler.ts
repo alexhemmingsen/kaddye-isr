@@ -1,20 +1,21 @@
 /**
- * Lambda@Edge origin-response handler for Qlara.
+ * Lambda@Edge origin-request handler for Qlara.
  *
  * This file is bundled into a self-contained ZIP and deployed to Lambda@Edge.
  * It does NOT run in the developer's Node.js — it runs at CloudFront edge locations.
  *
  * Config values are injected at bundle time via esbuild `define` (Lambda@Edge has no env vars).
  *
+ * Runs as an **origin-request** trigger so that generated responses are cached by CloudFront.
+ * (Origin-response generated responses are NOT cached — documented AWS behavior.)
+ *
  * Flow for a request to /product/5:
  * 1. CloudFront viewer-request rewrites /product/5 → /product/5.html
- * 2. S3 returns 403 (file doesn't exist, OAC treats missing as 403)
- * 3. This origin-response handler intercepts:
- *    a. Invokes the renderer Lambda synchronously
- *    b. Renderer fetches metadata from the data source, patches fallback HTML with SEO metadata
- *    c. Renderer uploads product/5.html to S3 and returns the rendered HTML
- *    d. Edge handler serves the fully rendered HTML (first request gets full SEO)
- *    e. Subsequent requests hit S3 directly (page is cached)
+ * 2. CloudFront checks edge cache → miss → fires this origin-request handler
+ * 3. Handler checks S3 for product/5.html:
+ *    a. File exists → return it directly (CloudFront caches it)
+ *    b. File doesn't exist → invoke renderer → return rendered HTML (CloudFront caches it)
+ * 4. Subsequent requests hit CloudFront edge cache directly (~10-30ms)
  */
 
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -48,18 +49,21 @@ interface CloudFrontResponse {
   statusDescription: string;
   headers: Record<string, Array<{ key: string; value: string }>>;
   body?: string;
+  bodyEncoding?: string;
 }
 
 interface CloudFrontRequest {
   uri: string;
   querystring: string;
+  method: string;
+  headers: Record<string, Array<{ key: string; value: string }>>;
+  origin?: Record<string, unknown>;
 }
 
-interface CloudFrontResponseEvent {
+interface CloudFrontRequestEvent {
   Records: Array<{
     cf: {
       request: CloudFrontRequest;
-      response: CloudFrontResponse;
     };
   }>;
 }
@@ -227,66 +231,62 @@ async function invokeRenderer(uri: string, match: RouteMatch): Promise<string | 
 
 // ── Response builder ─────────────────────────────────────────────
 
-// Lambda@Edge read-only headers — must be preserved from the original response
-const READ_ONLY_HEADERS = ['transfer-encoding', 'via'];
-
-function buildHtmlResponse(
-  html: string,
-  originalResponse: CloudFrontResponse
-): CloudFrontResponse {
-  const headers: Record<string, Array<{ key: string; value: string }>> = {
-    'content-type': [
-      { key: 'Content-Type', value: 'text/html; charset=utf-8' },
-    ],
-    'cache-control': [
-      { key: 'Cache-Control', value: `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60` },
-    ],
-  };
-
-  // Preserve read-only headers from the original response to avoid 502
-  for (const headerName of READ_ONLY_HEADERS) {
-    if (originalResponse.headers[headerName]) {
-      headers[headerName] = originalResponse.headers[headerName];
-    }
-  }
-
+function buildHtmlResponse(html: string): CloudFrontResponse {
   return {
     status: '200',
     statusDescription: 'OK',
-    headers,
+    headers: {
+      'content-type': [
+        { key: 'Content-Type', value: 'text/html; charset=utf-8' },
+      ],
+      'cache-control': [
+        { key: 'Cache-Control', value: `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60` },
+      ],
+    },
     body: html,
+    bodyEncoding: 'text',
   };
 }
 
 // ── Handler ──────────────────────────────────────────────────────
 
 export async function handler(
-  event: CloudFrontResponseEvent
-): Promise<CloudFrontResponse> {
-  const record = event.Records[0].cf;
-  const response = record.response;
-  const request = record.request;
+  event: CloudFrontRequestEvent
+): Promise<CloudFrontRequest | CloudFrontResponse> {
+  const request = event.Records[0].cf.request;
   const uri = request.uri;
-  const status = parseInt(response.status, 10);
 
-  // 1. If response is 200 (file exists in S3), pass through
-  if (status !== 403 && status !== 404) {
-    return response;
-  }
-
-  // At this point, the file does NOT exist in S3 (403 from OAC or 404)
-
-  // 2. Skip non-HTML file requests — these are never dynamic routes
-  //    e.g. /product/20.txt (RSC flight data), /product/20.json, etc.
+  // 1. Non-HTML file requests → forward to S3 origin (handled normally by CloudFront)
+  //    e.g. /product/20.txt (RSC flight data), /product/20.json, JS, CSS, images, etc.
   const nonHtmlExt = uri.match(/\.([a-z0-9]+)$/)?.[1];
   if (nonHtmlExt && nonHtmlExt !== 'html') {
-    return response;
+    return request;
+  }
+
+  // 2. Try to get the file from S3 directly
+  const s3Key = uri.replace(/^\//, '');
+  if (s3Key) {
+    try {
+      const s3Response = await s3.send(
+        new GetObjectCommand({
+          Bucket: __QLARA_BUCKET_NAME__,
+          Key: s3Key,
+        })
+      );
+      const body = await s3Response.Body?.transformToString('utf-8');
+      if (body) {
+        // File exists in S3 → return it directly (CloudFront will cache this)
+        return buildHtmlResponse(body);
+      }
+    } catch {
+      // File doesn't exist in S3 — continue to dynamic route handling
+    }
   }
 
   // 3. Fetch manifest and check if this URL matches a Qlara dynamic route
-  const manifest = await getManifest();
   // Strip .html suffix that the URL rewrite function adds before matching
   const cleanUri = uri.replace(/\.html$/, '');
+  const manifest = await getManifest();
   const match = manifest ? matchRoute(cleanUri, manifest.routes) : null;
 
   // 4. If route matches: invoke renderer synchronously to get fully rendered HTML
@@ -295,17 +295,17 @@ export async function handler(
     const renderedHtml = await invokeRenderer(cleanUri, match);
 
     if (renderedHtml) {
-      return buildHtmlResponse(renderedHtml, response);
+      return buildHtmlResponse(renderedHtml);
     }
 
     // Renderer failed — fall back to unpatched fallback HTML (no SEO, but page still works)
     const fallbackHtml = await getFallbackHtml(match.route);
     if (fallbackHtml) {
       const patchedHtml = patchFallback(fallbackHtml, match.params);
-      return buildHtmlResponse(patchedHtml, response);
+      return buildHtmlResponse(patchedHtml);
     }
   }
 
-  // 5. No match or no fallback — return original error
-  return response;
+  // 5. No match or no fallback — forward to origin (S3 will return 403/404)
+  return request;
 }

@@ -202,7 +202,7 @@ export async function putObject(
       Key: key,
       Body: body,
       ContentType: contentType,
-      CacheControl: cacheControl || 'public, max-age=0, s-maxage=86400, stale-while-revalidate=60',
+      CacheControl: cacheControl || 'public, max-age=0, s-maxage=3600, stale-while-revalidate=60',
     })
   );
 }

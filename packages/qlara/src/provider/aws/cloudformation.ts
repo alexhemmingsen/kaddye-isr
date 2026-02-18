@@ -10,7 +10,7 @@ export interface CloudFormationConfig {
  * - S3 bucket (private, OAC access only)
  * - CloudFront distribution with OAC
  * - CloudFront Function for URL rewriting (/product/42 → /product/42.html)
- * - Lambda@Edge origin-response handler
+ * - Lambda@Edge origin-request handler
  * - Renderer Lambda (metadata generator)
  * - IAM roles for both Lambdas
  */
@@ -296,7 +296,7 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
               CachePolicyId: { Ref: 'CachePolicy' },
               LambdaFunctionAssociations: [
                 {
-                  EventType: 'origin-response',
+                  EventType: 'origin-request',
                   LambdaFunctionARN: { Ref: 'EdgeHandlerVersion' },
                   IncludeBody: false,
                 },

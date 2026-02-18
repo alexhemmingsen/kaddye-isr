@@ -203,7 +203,7 @@ async function updateCloudFrontEdgeVersion(
 
   if (lambdaAssociations?.Items) {
     for (const assoc of lambdaAssociations.Items) {
-      if (assoc.EventType === 'origin-response') {
+      if (assoc.EventType === 'origin-request') {
         assoc.LambdaFunctionARN = newVersionArn;
       }
     }

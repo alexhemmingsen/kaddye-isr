@@ -1,5 +1,5 @@
 /**
- * Tests for the Lambda@Edge origin-response handler logic.
+ * Tests for the Lambda@Edge origin-request handler logic.
  *
  * The actual edge-handler.ts uses injected globals (__QLARA_BUCKET_NAME__, etc.)
  * and module-level AWS SDK clients, making it hard to unit test directly.
@@ -46,51 +46,67 @@ function matchRoute(
 }
 
 // ── Testable handler that accepts dependencies ───────────────────
+// Models the new origin-request flow:
+// 1. Non-HTML → forward to origin
+// 2. Try S3 → if file exists, serve it
+// 3. Check manifest → if route matches, invoke renderer
+// 4. No match → forward to origin
 
 interface Deps {
   getManifest: () => Promise<{ version: 1; routes: ManifestRoute[] } | null>;
-  getIndexHtml: () => Promise<string | null>;
-  invokeRenderer: (uri: string) => Promise<void>;
+  getS3Html: (key: string) => Promise<string | null>;
+  getFallbackHtml: (route: ManifestRoute) => Promise<string | null>;
+  invokeRenderer: (uri: string, match: RouteMatch) => Promise<string | null>;
 }
 
-interface CloudFrontEvent {
+interface CloudFrontRequestEvent {
   uri: string;
   querystring: string;
-  responseStatus: number;
 }
 
-async function handleEdgeResponse(event: CloudFrontEvent, deps: Deps) {
-  const { uri, querystring, responseStatus } = event;
-  const isBypass = querystring.includes('__qlara_bypass');
+type HandlerResult =
+  | { action: 'forward-to-origin' }
+  | { action: 'serve-html'; html: string; source: 's3' | 'renderer' | 'fallback' };
 
-  // 1. File exists → pass through
-  if (responseStatus !== 403 && responseStatus !== 404) {
-    return { action: 'pass-through' as const };
+async function handleEdgeRequest(event: CloudFrontRequestEvent, deps: Deps): Promise<HandlerResult> {
+  const { uri } = event;
+
+  // 1. Non-HTML files → forward to origin
+  const nonHtmlExt = uri.match(/\.([a-z0-9]+)$/)?.[1];
+  if (nonHtmlExt && nonHtmlExt !== 'html') {
+    return { action: 'forward-to-origin' };
   }
 
-  // 2. Bypass + error → serve index.html, NO renderer
-  if (isBypass) {
-    const html = await deps.getIndexHtml();
-    if (!html) return { action: 'pass-through' as const };
-    return { action: 'serve-html' as const, html, rendererInvoked: false };
+  // 2. Try S3 for the file
+  const s3Key = uri.replace(/^\//, '');
+  if (s3Key) {
+    const html = await deps.getS3Html(s3Key);
+    if (html) {
+      return { action: 'serve-html', html, source: 's3' };
+    }
   }
 
-  // 3. Check route match
+  // 3. Check manifest for route match
+  const cleanUri = uri.replace(/\.html$/, '');
   const manifest = await deps.getManifest();
-  const match = manifest ? matchRoute(uri, manifest.routes) : null;
+  const match = manifest ? matchRoute(cleanUri, manifest.routes) : null;
 
-  // 4. Get index.html
-  const html = await deps.getIndexHtml();
-  if (!html) return { action: 'pass-through' as const };
-
-  // 5. If match → trigger renderer
+  // 4. If match → invoke renderer
   if (match) {
-    await deps.invokeRenderer(uri);
-    return { action: 'serve-html' as const, html, rendererInvoked: true };
+    const renderedHtml = await deps.invokeRenderer(cleanUri, match);
+    if (renderedHtml) {
+      return { action: 'serve-html', html: renderedHtml, source: 'renderer' };
+    }
+
+    // Renderer failed → try fallback
+    const fallbackHtml = await deps.getFallbackHtml(match.route);
+    if (fallbackHtml) {
+      return { action: 'serve-html', html: fallbackHtml, source: 'fallback' };
+    }
   }
 
-  // 6. No match → still serve index.html (SPA fallback)
-  return { action: 'serve-html' as const, html, rendererInvoked: false };
+  // 5. No match → forward to origin
+  return { action: 'forward-to-origin' };
 }
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -111,208 +127,244 @@ const MANIFEST = {
   ],
 };
 
-const INDEX_HTML = '<!DOCTYPE html><html><body>SPA Shell</body></html>';
+const RENDERED_HTML = '<!DOCTYPE html><html><body>Rendered</body></html>';
+const FALLBACK_HTML = '<!DOCTYPE html><html><body>Fallback</body></html>';
+const S3_HTML = '<!DOCTYPE html><html><body>From S3</body></html>';
 
-describe('edge handler logic', () => {
+describe('edge handler logic (origin-request)', () => {
   let deps: Deps;
 
   beforeEach(() => {
     deps = {
       getManifest: vi.fn().mockResolvedValue(MANIFEST),
-      getIndexHtml: vi.fn().mockResolvedValue(INDEX_HTML),
-      invokeRenderer: vi.fn().mockResolvedValue(undefined),
+      getS3Html: vi.fn().mockResolvedValue(null), // Default: file doesn't exist
+      getFallbackHtml: vi.fn().mockResolvedValue(FALLBACK_HTML),
+      invokeRenderer: vi.fn().mockResolvedValue(RENDERED_HTML),
     };
   });
 
-  // ── Pass-through cases ─────────────────────────────────────────
+  // ── Non-HTML files → forward to origin ─────────────────────────
 
-  it('passes through 200 responses (file exists)', async () => {
-    const result = await handleEdgeResponse(
-      { uri: '/product/1', querystring: '', responseStatus: 200 },
+  it('forwards non-HTML files to origin', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/product/20.txt', querystring: '' },
       deps
     );
 
-    expect(result.action).toBe('pass-through');
+    expect(result.action).toBe('forward-to-origin');
+    expect(deps.getS3Html).not.toHaveBeenCalled();
     expect(deps.getManifest).not.toHaveBeenCalled();
-    expect(deps.getIndexHtml).not.toHaveBeenCalled();
-    expect(deps.invokeRenderer).not.toHaveBeenCalled();
   });
 
-  it('passes through 301 redirects', async () => {
-    const result = await handleEdgeResponse(
-      { uri: '/old-page', querystring: '', responseStatus: 301 },
+  it('forwards .json files to origin', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/data/products.json', querystring: '' },
       deps
     );
 
-    expect(result.action).toBe('pass-through');
+    expect(result.action).toBe('forward-to-origin');
   });
 
-  it('passes through 304 not modified', async () => {
-    const result = await handleEdgeResponse(
-      { uri: '/style.css', querystring: '', responseStatus: 304 },
+  it('forwards JS files to origin', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/_next/static/chunks/main.js', querystring: '' },
       deps
     );
 
-    expect(result.action).toBe('pass-through');
+    expect(result.action).toBe('forward-to-origin');
   });
 
-  // ── Bypass cases ───────────────────────────────────────────────
+  it('forwards CSS files to origin', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/_next/static/css/style.css', querystring: '' },
+      deps
+    );
 
-  it('serves index.html with bypass param (no renderer)', async () => {
-    const result = await handleEdgeResponse(
-      {
-        uri: '/product/42',
-        querystring: '__qlara_bypass=1',
-        responseStatus: 403,
-      },
+    expect(result.action).toBe('forward-to-origin');
+  });
+
+  it('forwards image files to origin', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/images/logo.png', querystring: '' },
+      deps
+    );
+
+    expect(result.action).toBe('forward-to-origin');
+  });
+
+  // ── S3 file exists → serve directly ─────────────────────────────
+
+  it('serves HTML from S3 when file exists', async () => {
+    deps.getS3Html = vi.fn().mockResolvedValue(S3_HTML);
+
+    const result = await handleEdgeRequest(
+      { uri: '/product/1.html', querystring: '' },
       deps
     );
 
     expect(result.action).toBe('serve-html');
     if (result.action === 'serve-html') {
-      expect(result.html).toBe(INDEX_HTML);
-      expect(result.rendererInvoked).toBe(false);
+      expect(result.html).toBe(S3_HTML);
+      expect(result.source).toBe('s3');
     }
-    expect(deps.invokeRenderer).not.toHaveBeenCalled();
-  });
-
-  it('bypass param prevents renderer even for matching routes', async () => {
-    const result = await handleEdgeResponse(
-      {
-        uri: '/product/99',
-        querystring: 'foo=bar&__qlara_bypass=1',
-        responseStatus: 404,
-      },
-      deps
-    );
-
-    expect(result.action).toBe('serve-html');
-    expect(deps.invokeRenderer).not.toHaveBeenCalled();
-    // Should not even check the manifest
     expect(deps.getManifest).not.toHaveBeenCalled();
+    expect(deps.invokeRenderer).not.toHaveBeenCalled();
   });
 
-  it('bypass falls back to pass-through if index.html unavailable', async () => {
-    deps.getIndexHtml = vi.fn().mockResolvedValue(null);
+  it('serves index.html from S3', async () => {
+    deps.getS3Html = vi.fn().mockResolvedValue(S3_HTML);
 
-    const result = await handleEdgeResponse(
-      {
-        uri: '/product/42',
-        querystring: '__qlara_bypass=1',
-        responseStatus: 403,
-      },
-      deps
-    );
-
-    expect(result.action).toBe('pass-through');
-  });
-
-  // ── Dynamic route matching ─────────────────────────────────────
-
-  it('serves index.html AND invokes renderer for matching route', async () => {
-    const result = await handleEdgeResponse(
-      { uri: '/product/42', querystring: '', responseStatus: 403 },
+    const result = await handleEdgeRequest(
+      { uri: '/index.html', querystring: '' },
       deps
     );
 
     expect(result.action).toBe('serve-html');
     if (result.action === 'serve-html') {
-      expect(result.html).toBe(INDEX_HTML);
-      expect(result.rendererInvoked).toBe(true);
+      expect(result.source).toBe('s3');
     }
-    expect(deps.invokeRenderer).toHaveBeenCalledWith('/product/42');
+  });
+
+  it('calls S3 with the correct key (strips leading slash)', async () => {
+    deps.getS3Html = vi.fn().mockResolvedValue(null);
+
+    await handleEdgeRequest(
+      { uri: '/product/42.html', querystring: '' },
+      deps
+    );
+
+    expect(deps.getS3Html).toHaveBeenCalledWith('product/42.html');
+  });
+
+  // ── Dynamic route matching → renderer ──────────────────────────
+
+  it('invokes renderer for matching route when S3 file missing', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/product/42.html', querystring: '' },
+      deps
+    );
+
+    expect(result.action).toBe('serve-html');
+    if (result.action === 'serve-html') {
+      expect(result.html).toBe(RENDERED_HTML);
+      expect(result.source).toBe('renderer');
+    }
+    expect(deps.invokeRenderer).toHaveBeenCalledWith(
+      '/product/42',
+      expect.objectContaining({
+        route: expect.objectContaining({ pattern: '/product/:id' }),
+        params: { id: '42' },
+      })
+    );
   });
 
   it('invokes renderer for multi-param routes', async () => {
-    const result = await handleEdgeResponse(
-      {
-        uri: '/blog/2024/my-post',
-        querystring: '',
-        responseStatus: 403,
-      },
+    const result = await handleEdgeRequest(
+      { uri: '/blog/2024/my-post.html', querystring: '' },
       deps
     );
 
     expect(result.action).toBe('serve-html');
     if (result.action === 'serve-html') {
-      expect(result.rendererInvoked).toBe(true);
+      expect(result.source).toBe('renderer');
     }
-    expect(deps.invokeRenderer).toHaveBeenCalledWith('/blog/2024/my-post');
+    expect(deps.invokeRenderer).toHaveBeenCalledWith(
+      '/blog/2024/my-post',
+      expect.objectContaining({
+        params: { year: '2024', slug: 'my-post' },
+      })
+    );
   });
 
-  // ── SPA fallback (no match) ────────────────────────────────────
+  // ── Renderer fails → fallback ──────────────────────────────────
 
-  it('serves index.html without renderer for non-matching 404', async () => {
-    const result = await handleEdgeResponse(
-      { uri: '/about', querystring: '', responseStatus: 404 },
+  it('falls back to fallback HTML when renderer fails', async () => {
+    deps.invokeRenderer = vi.fn().mockResolvedValue(null);
+
+    const result = await handleEdgeRequest(
+      { uri: '/product/42.html', querystring: '' },
       deps
     );
 
     expect(result.action).toBe('serve-html');
     if (result.action === 'serve-html') {
-      expect(result.html).toBe(INDEX_HTML);
-      expect(result.rendererInvoked).toBe(false);
+      expect(result.html).toBe(FALLBACK_HTML);
+      expect(result.source).toBe('fallback');
     }
+  });
+
+  it('forwards to origin when renderer AND fallback fail', async () => {
+    deps.invokeRenderer = vi.fn().mockResolvedValue(null);
+    deps.getFallbackHtml = vi.fn().mockResolvedValue(null);
+
+    const result = await handleEdgeRequest(
+      { uri: '/product/42.html', querystring: '' },
+      deps
+    );
+
+    expect(result.action).toBe('forward-to-origin');
+  });
+
+  // ── No route match → forward to origin ──────────────────────────
+
+  it('forwards to origin for non-matching paths', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/about.html', querystring: '' },
+      deps
+    );
+
+    expect(result.action).toBe('forward-to-origin');
     expect(deps.invokeRenderer).not.toHaveBeenCalled();
   });
 
-  it('serves index.html without renderer for unknown dynamic path', async () => {
-    const result = await handleEdgeResponse(
-      { uri: '/user/123/settings', querystring: '', responseStatus: 403 },
+  it('forwards to origin for deeply nested non-matching paths', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/user/123/settings.html', querystring: '' },
       deps
     );
 
-    expect(result.action).toBe('serve-html');
-    if (result.action === 'serve-html') {
-      expect(result.rendererInvoked).toBe(false);
-    }
+    expect(result.action).toBe('forward-to-origin');
     expect(deps.invokeRenderer).not.toHaveBeenCalled();
   });
 
-  // ── S3 OAC behavior (403 = not found) ──────────────────────────
+  // ── Manifest errors ─────────────────────────────────────────────
 
-  it('treats 403 the same as 404 (S3 OAC returns 403 for missing objects)', async () => {
-    const result403 = await handleEdgeResponse(
-      { uri: '/product/42', querystring: '', responseStatus: 403 },
-      deps
-    );
-
-    const result404 = await handleEdgeResponse(
-      { uri: '/product/42', querystring: '', responseStatus: 404 },
-      deps
-    );
-
-    expect(result403.action).toBe('serve-html');
-    expect(result404.action).toBe('serve-html');
-  });
-
-  // ── Error handling ─────────────────────────────────────────────
-
-  it('falls back to pass-through if manifest fetch fails', async () => {
+  it('forwards to origin if manifest fetch fails', async () => {
     deps.getManifest = vi.fn().mockResolvedValue(null);
 
-    const result = await handleEdgeResponse(
-      { uri: '/product/42', querystring: '', responseStatus: 403 },
+    const result = await handleEdgeRequest(
+      { uri: '/product/42.html', querystring: '' },
       deps
     );
 
-    // No manifest → can't match → but still serves index.html as SPA fallback
-    expect(result.action).toBe('serve-html');
-    if (result.action === 'serve-html') {
-      expect(result.rendererInvoked).toBe(false);
-    }
+    expect(result.action).toBe('forward-to-origin');
   });
 
-  it('falls back to pass-through if index.html fetch fails', async () => {
-    deps.getIndexHtml = vi.fn().mockResolvedValue(null);
+  // ── .html extension handling ────────────────────────────────────
 
-    const result = await handleEdgeResponse(
-      { uri: '/product/42', querystring: '', responseStatus: 403 },
+  it('treats .html as HTML (not forwarded to origin)', async () => {
+    deps.getS3Html = vi.fn().mockResolvedValue(S3_HTML);
+
+    const result = await handleEdgeRequest(
+      { uri: '/about.html', querystring: '' },
       deps
     );
 
-    expect(result.action).toBe('pass-through');
-    // Should not invoke renderer if we can't serve the fallback
-    expect(deps.invokeRenderer).not.toHaveBeenCalled();
+    expect(result.action).toBe('serve-html');
+  });
+
+  it('strips .html before route matching', async () => {
+    const result = await handleEdgeRequest(
+      { uri: '/product/42.html', querystring: '' },
+      deps
+    );
+
+    // Should match /product/:id with id=42, not id=42.html
+    expect(deps.invokeRenderer).toHaveBeenCalledWith(
+      '/product/42',
+      expect.objectContaining({
+        params: { id: '42' },
+      })
+    );
   });
 });
