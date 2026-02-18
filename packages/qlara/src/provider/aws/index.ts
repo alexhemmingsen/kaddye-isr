@@ -203,8 +203,9 @@ async function updateCloudFrontEdgeVersion(
 
   if (lambdaAssociations?.Items) {
     for (const assoc of lambdaAssociations.Items) {
-      if (assoc.EventType === 'origin-request') {
+      if (assoc.EventType === 'origin-request' || assoc.EventType === 'origin-response') {
         assoc.LambdaFunctionARN = newVersionArn;
+        assoc.EventType = 'origin-request'; // Ensure origin-request for caching
       }
     }
   }
