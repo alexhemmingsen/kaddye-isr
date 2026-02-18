@@ -513,7 +513,7 @@ export function aws(awsConfig: AwsConfig = {}): QlaraProvider {
       //    metadata generators to fetch metadata, then patches the fallback HTML.
       //    No Chromium or Puppeteer — just S3 reads, data source calls, and S3 writes.
       console.log('[qlara/aws] Bundling renderer...');
-      const rendererZip = await bundleRenderer(config.routeFile, cacheTtl);
+      const rendererZip = await bundleRenderer(config.routeFile, cacheTtl, config.framework);
 
       // Wait for renderer to be ready
       await waitUntilFunctionUpdatedV2(

@@ -54,6 +54,7 @@ import type {
 // At bundle time: '__qlara_routes__' → './qlara.routes.ts' (or wherever the dev put it)
 // Injected at bundle time by esbuild define
 declare const __QLARA_CACHE_TTL__: number;
+declare const __QLARA_FRAMEWORK__: string;
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at bundle time by esbuild alias
@@ -759,6 +760,34 @@ function metadataToRscEntries(metadata: QlaraMetadata): string {
   return entries.join('');
 }
 
+/**
+ * Extract RSC flight data from rendered HTML (Next.js-specific).
+ *
+ * Next.js embeds RSC data inside <script>self.__next_f.push([1,"..."])</script> blocks.
+ * The .txt file is these payloads concatenated with JSON string escapes resolved.
+ * Next.js's client-side router fetches the .txt file for client-side navigation
+ * instead of the full .html — so we must generate it for renderer-created pages.
+ *
+ * Only called when __QLARA_FRAMEWORK__ === 'next'.
+ */
+function extractRscFlightData(html: string): string | null {
+  const chunks: string[] = [];
+  const regex = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g;
+  let match;
+
+  while ((match = regex.exec(html)) !== null) {
+    // Unescape the JSON string: \" → ", \\ → \, \n → newline
+    const unescaped = match[1]
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
+    chunks.push(unescaped);
+  }
+
+  if (chunks.length === 0) return null;
+  return chunks.join('');
+}
+
 export async function handler(event: RendererEvent & { warmup?: boolean }): Promise<RendererResult> {
   // Warmup invocation — just initialize the runtime and return
   if (event.warmup) {
@@ -825,7 +854,7 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
       }
     }
 
-    // 5. Upload to S3
+    // 5. Upload HTML to S3
     await s3.send(
       new PutObjectCommand({
         Bucket: bucket,
@@ -835,6 +864,26 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
         CacheControl: `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60`,
       })
     );
+
+    // 6. Framework-specific post-render uploads
+    //    Next.js: extract RSC flight data and upload as .txt for client-side navigation.
+    //    Next.js fetches .txt instead of .html when using <Link> / client-side nav.
+    //    Without this, client-side nav falls back to a full page reload (slow).
+    if (__QLARA_FRAMEWORK__ === 'next') {
+      const rscData = extractRscFlightData(html);
+      if (rscData) {
+        const txtKey = s3Key.replace(/\.html$/, '.txt');
+        await s3.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: txtKey,
+            Body: rscData,
+            ContentType: 'text/plain; charset=utf-8',
+            CacheControl: `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60`,
+          })
+        );
+      }
+    }
 
     return {
       statusCode: 200,

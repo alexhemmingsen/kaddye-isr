@@ -513,6 +513,12 @@ export interface QlaraPluginConfig {
   provider: QlaraProvider;
   /** Env var names to forward to the renderer Lambda (values read from process.env at build time) */
   env?: string[];
+  /**
+   * The framework identifier. Set automatically by framework plugins (e.g. 'next' by withQlara).
+   * Used by the renderer to enable framework-specific post-render behavior
+   * (e.g. generating .txt RSC flight data files for Next.js client-side navigation).
+   */
+  framework?: string;
 }
 
 export interface QlaraProvider {
@@ -542,6 +548,11 @@ export interface QlaraDeployConfig {
   routeFile: string;
   /** Environment variables for the renderer Lambda (key-value pairs resolved at build time) */
   env?: Record<string, string>;
+  /**
+   * The framework identifier (e.g. 'next'). Set by framework plugins.
+   * Passed to the renderer to enable framework-specific post-render behavior.
+   */
+  framework?: string;
 }
 
 export interface QlaraManifest {

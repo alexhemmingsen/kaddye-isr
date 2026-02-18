@@ -150,6 +150,7 @@ export function withQlara(qlaraConfig: QlaraPluginConfig) {
       outputDir,
       routeFile: resolve(qlaraConfig.routeFile),
       env,
+      framework: 'next',
     };
 
     mkdirSync(QLARA_DIR, { recursive: true });

@@ -132,7 +132,7 @@ export async function bundleEdgeHandler(
  *
  * @param routeFile - Absolute path to the developer's route file
  */
-export async function bundleRenderer(routeFile?: string, cacheTtl: number = 3600): Promise<Buffer> {
+export async function bundleRenderer(routeFile?: string, cacheTtl: number = 3600, framework?: string): Promise<Buffer> {
   mkdirSync(BUNDLE_DIR, { recursive: true });
   const outfile = join(BUNDLE_DIR, 'renderer.js');
 
@@ -161,6 +161,7 @@ export async function bundleRenderer(routeFile?: string, cacheTtl: number = 3600
     alias,
     define: {
       __QLARA_CACHE_TTL__: String(cacheTtl),
+      __QLARA_FRAMEWORK__: JSON.stringify(framework || ''),
     },
     external: [],
   });
