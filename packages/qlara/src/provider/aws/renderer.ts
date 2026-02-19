@@ -15,7 +15,7 @@
  * route definitions, each with a pattern and a metaDataGenerator function.
  */
 
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import type {
   QlaraMetadata,
   QlaraOpenGraph,
@@ -788,6 +788,317 @@ function extractRscFlightData(html: string): string | null {
   return chunks.join('');
 }
 
+// ── Per-segment prefetch file generation (Next.js 16+) ───────────
+//
+// Next.js 16 introduced per-segment prefetch files in a subdirectory
+// per page (e.g. product/1/__next._tree.txt). The renderer must generate
+// these for renderer-created pages so they match build-time pages.
+//
+// Approach: discover segment files from a build-time reference page on S3,
+// classify each file, and copy/patch as needed. If no reference page exists
+// (Next.js 15 or no build-time pages), segment generation is skipped.
+
+/** Cache reference segment directory per route prefix across warm invocations */
+const referencePageCache = new Map<string, string | null>();
+
+/**
+ * Find a build-time page's segment directory in S3 to use as a template.
+ * Returns the S3 key prefix (e.g. 'product/1/') or null.
+ */
+async function findReferenceSegmentDir(bucket: string, routePrefix: string): Promise<string | null> {
+  const cached = referencePageCache.get(routePrefix);
+  if (cached !== undefined) return cached;
+
+  try {
+    const response = await s3.send(new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: `${routePrefix}/`,
+      MaxKeys: 200,
+    }));
+
+    for (const obj of response.Contents || []) {
+      const key = obj.Key || '';
+      if (key.endsWith('/__next._tree.txt')) {
+        const dir = key.slice(0, key.length - '__next._tree.txt'.length);
+        referencePageCache.set(routePrefix, dir);
+        return dir;
+      }
+    }
+  } catch {
+    // S3 error — skip segment generation
+  }
+
+  referencePageCache.set(routePrefix, null);
+  return null;
+}
+
+type SegmentFileType = 'shared' | 'tree' | 'head' | 'full' | 'page';
+
+/**
+ * Classify a segment file by its name.
+ */
+function classifySegmentFile(name: string): SegmentFileType {
+  if (name === '__next._tree.txt') return 'tree';
+  if (name === '__next._head.txt') return 'head';
+  if (name === '__next._full.txt') return 'full';
+  if (name.includes('__PAGE__')) return 'page';
+  return 'shared';
+}
+
+/**
+ * List all segment file names in a reference directory.
+ */
+async function listReferenceSegmentFiles(bucket: string, refDir: string): Promise<string[]> {
+  try {
+    const response = await s3.send(new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: `${refDir}__next.`,
+      MaxKeys: 50,
+    }));
+
+    return (response.Contents || [])
+      .map(obj => obj.Key || '')
+      .filter(key => key.endsWith('.txt'))
+      .map(key => key.slice(refDir.length));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Patch the _tree.txt segment: replace the dynamic paramKey value.
+ */
+function patchTreeSegment(template: string, newValue: string): string {
+  return template.replace(
+    /"paramType":"d","paramKey":"[^"]*"/,
+    `"paramType":"d","paramKey":"${newValue}"`
+  );
+}
+
+/**
+ * Patch the __PAGE__.txt segment: replace param values in the component props.
+ */
+function patchPageSegment(template: string, params: Record<string, string>): string {
+  let result = template;
+  for (const [key, value] of Object.entries(params)) {
+    // RSC wire format: ["$","$L2",null,{"id":"OLD"}]
+    result = result.replace(
+      new RegExp(`"${key}":"[^"]*"`),
+      `"${key}":"${value}"`
+    );
+  }
+  return result;
+}
+
+/**
+ * Generate the _head.txt segment from a reference template and new metadata.
+ * Extracts preamble (module declarations) and buildId from the reference,
+ * rebuilds line 0 with new metadata.
+ */
+function generateHeadSegment(template: string, metadata: QlaraMetadata): string {
+  // Split into lines — preamble is everything before the line starting with '0:'
+  const lines = template.split('\n');
+  const preambleLines: string[] = [];
+  let line0 = '';
+
+  for (const line of lines) {
+    if (line.startsWith('0:')) {
+      line0 = line;
+    } else if (line.trim()) {
+      preambleLines.push(line);
+    }
+  }
+
+  // Extract buildId from reference
+  const buildIdMatch = line0.match(/"buildId":"([^"]+)"/);
+  const buildId = buildIdMatch ? buildIdMatch[1] : '';
+
+  // Extract the viewport/charset meta tags from the reference (preserve them)
+  // These are inside the rsc at children[1] (the $L2 viewport boundary)
+  // We keep the structure identical but replace the metadata children
+  const viewportMatch = line0.match(/"children":\[(\["\\?\$","meta"[^\]]*\](?:,\["\\?\$","meta"[^\]]*\])*)\]/);
+  const viewportTags = viewportMatch ? viewportMatch[1] : '["\$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]';
+
+  // Build metadata RSC children array (standard JSON, not HTML-escaped)
+  const metaChildren: string[] = [];
+  let idx = 0;
+
+  // Title
+  metaChildren.push(`["$","title","${idx++}",{"children":"${escapeJson(metadata.title)}"}]`);
+
+  // Description
+  if (metadata.description) {
+    metaChildren.push(`["$","meta","${idx++}",{"name":"description","content":"${escapeJson(metadata.description)}"}]`);
+  }
+
+  // Open Graph
+  if (metadata.openGraph) {
+    const og = metadata.openGraph;
+    if (og.title) metaChildren.push(`["$","meta","${idx++}",{"property":"og:title","content":"${escapeJson(og.title)}"}]`);
+    if (og.description) metaChildren.push(`["$","meta","${idx++}",{"property":"og:description","content":"${escapeJson(og.description)}"}]`);
+    if (og.url) metaChildren.push(`["$","meta","${idx++}",{"property":"og:url","content":"${escapeJson(og.url)}"}]`);
+    if (og.siteName) metaChildren.push(`["$","meta","${idx++}",{"property":"og:site_name","content":"${escapeJson(og.siteName)}"}]`);
+    if (og.type) metaChildren.push(`["$","meta","${idx++}",{"property":"og:type","content":"${escapeJson(og.type)}"}]`);
+    for (const img of toArray(og.images)) {
+      if (typeof img === 'string') {
+        metaChildren.push(`["$","meta","${idx++}",{"property":"og:image","content":"${escapeJson(img)}"}]`);
+      } else {
+        metaChildren.push(`["$","meta","${idx++}",{"property":"og:image","content":"${escapeJson(img.url)}"}]`);
+        if (img.alt) metaChildren.push(`["$","meta","${idx++}",{"property":"og:image:alt","content":"${escapeJson(img.alt)}"}]`);
+        if (img.width !== undefined) metaChildren.push(`["$","meta","${idx++}",{"property":"og:image:width","content":"${String(img.width)}"}]`);
+        if (img.height !== undefined) metaChildren.push(`["$","meta","${idx++}",{"property":"og:image:height","content":"${String(img.height)}"}]`);
+      }
+    }
+  }
+
+  // Twitter
+  if (metadata.twitter) {
+    const tw = metadata.twitter;
+    const card = ('card' in tw && tw.card) ? tw.card : 'summary';
+    metaChildren.push(`["$","meta","${idx++}",{"name":"twitter:card","content":"${escapeJson(card)}"}]`);
+    if (tw.title) metaChildren.push(`["$","meta","${idx++}",{"name":"twitter:title","content":"${escapeJson(tw.title)}"}]`);
+    if (tw.description) metaChildren.push(`["$","meta","${idx++}",{"name":"twitter:description","content":"${escapeJson(tw.description)}"}]`);
+    for (const img of toArray(tw.images)) {
+      if (typeof img === 'string') {
+        metaChildren.push(`["$","meta","${idx++}",{"name":"twitter:image","content":"${escapeJson(img)}"}]`);
+      } else {
+        metaChildren.push(`["$","meta","${idx++}",{"name":"twitter:image","content":"${escapeJson(img.url)}"}]`);
+        if (img.alt) metaChildren.push(`["$","meta","${idx++}",{"name":"twitter:image:alt","content":"${escapeJson(img.alt)}"}]`);
+      }
+    }
+  }
+
+  // Reconstruct the _head.txt content by replacing the metadata children
+  // in the reference template's line 0 structure
+  const metaChildrenStr = metaChildren.join(',');
+
+  // The _head.txt line 0 structure (from analysis):
+  // 0:{"buildId":"...","rsc":["$","$1","h",{"children":[null,["$","$L2",null,{"children":[viewport tags]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[METADATA HERE]}]}]}],null]}],"loading":null,"isPartial":false}
+  // Replace the "Next.Metadata" children array
+  const newLine0 = line0.replace(
+    /("name":"Next\.Metadata","children":\[)[\s\S]*?(\]\})/,
+    `$1${metaChildrenStr}$2`
+  );
+
+  return preambleLines.join('\n') + '\n' + newLine0 + '\n';
+}
+
+/**
+ * Generate per-segment prefetch files for a renderer-created page (Next.js 16+).
+ * Reads segment files from a build-time reference page, patches page-specific data,
+ * and uploads to the new page's subdirectory.
+ *
+ * Skips gracefully if no reference page exists (Next.js 15 or first deploy).
+ */
+async function generateSegmentFiles(
+  bucket: string,
+  uri: string,
+  params: Record<string, string>,
+  rscData: string | null,
+  metadata: QlaraMetadata | null,
+): Promise<void> {
+  const cleanUri = uri.replace(/^\//, '').replace(/\/$/, '');
+  const parts = cleanUri.split('/');
+  const routePrefix = parts.slice(0, -1).join('/'); // 'product'
+  const segmentDir = `${cleanUri}/`;                 // 'product/42/'
+
+  // Find a build-time page with segment files to use as reference
+  const refDir = await findReferenceSegmentDir(bucket, routePrefix);
+  if (!refDir) return; // No segment files on S3 — Next.js 15 or no build-time pages
+
+  // List all segment files in the reference directory
+  const fileNames = await listReferenceSegmentFiles(bucket, refDir);
+  if (fileNames.length === 0) return;
+
+  // Read all reference files we need (skip _full — we use rscData directly)
+  const filesToRead = fileNames.filter(name => classifySegmentFile(name) !== 'full');
+  const readResults = await Promise.allSettled(
+    filesToRead.map(async (name) => {
+      const result = await s3.send(new GetObjectCommand({
+        Bucket: bucket,
+        Key: `${refDir}${name}`,
+      }));
+      return {
+        name,
+        content: await result.Body?.transformToString('utf-8') || '',
+      };
+    })
+  );
+
+  const refMap = new Map<string, string>();
+  for (const result of readResults) {
+    if (result.status === 'fulfilled' && result.value.content) {
+      refMap.set(result.value.name, result.value.content);
+    }
+  }
+
+  // Generate each segment file
+  const paramValue = parts[parts.length - 1]; // last path segment = dynamic param value
+  const uploads: Promise<unknown>[] = [];
+  const cacheControl = `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60`;
+
+  for (const name of fileNames) {
+    let content: string | null = null;
+    const type = classifySegmentFile(name);
+
+    switch (type) {
+      case 'shared':
+        content = refMap.get(name) || null;
+        break;
+      case 'tree': {
+        const template = refMap.get(name);
+        if (template) {
+          content = patchTreeSegment(template, paramValue);
+        }
+        break;
+      }
+      case 'head': {
+        const template = refMap.get(name);
+        if (template && metadata) {
+          content = generateHeadSegment(template, metadata);
+        }
+        break;
+      }
+      case 'full':
+        content = rscData;
+        break;
+      case 'page': {
+        const template = refMap.get(name);
+        if (template) {
+          content = patchPageSegment(template, params);
+        }
+        break;
+      }
+    }
+
+    if (content) {
+      uploads.push(
+        s3.send(new PutObjectCommand({
+          Bucket: bucket,
+          Key: `${segmentDir}${name}`,
+          Body: content,
+          ContentType: 'text/plain; charset=utf-8',
+          CacheControl: cacheControl,
+        }))
+      );
+    }
+  }
+
+  await Promise.all(uploads);
+}
+
+/**
+ * Escape a string for use inside a JSON string value.
+ */
+function escapeJson(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
 export async function handler(event: RendererEvent & { warmup?: boolean }): Promise<RendererResult> {
   // Warmup invocation — just initialize the runtime and return
   if (event.warmup) {
@@ -845,9 +1156,10 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
 
     // 3. Call the metaDataGenerator to fetch metadata from the data source
     const routeDef = routes?.find((r: { route: string }) => r.route === routePattern);
+    let metadata: QlaraMetadata | null = null;
 
     if (routeDef?.metaDataGenerator) {
-      const metadata = await routeDef.metaDataGenerator(params);
+      metadata = await routeDef.metaDataGenerator(params);
       if (metadata) {
         // 4. Patch the HTML with real metadata
         html = patchMetadata(html, metadata);
@@ -866,9 +1178,8 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
     );
 
     // 6. Framework-specific post-render uploads
-    //    Next.js: extract RSC flight data and upload as .txt for client-side navigation.
-    //    Next.js fetches .txt instead of .html when using <Link> / client-side nav.
-    //    Without this, client-side nav falls back to a full page reload (slow).
+    //    Next.js: extract RSC flight data, upload .txt for client-side navigation,
+    //    and generate per-segment prefetch files (Next.js 16+).
     if (__QLARA_FRAMEWORK__ === 'next') {
       const rscData = extractRscFlightData(html);
       if (rscData) {
@@ -883,6 +1194,11 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
           })
         );
       }
+
+      // 7. Generate per-segment prefetch files (Next.js 16+ Segment Cache)
+      //    Reads templates from a build-time reference page, patches page-specific data.
+      //    Skips automatically for Next.js 15 (no segment files on S3).
+      await generateSegmentFiles(bucket, uri, params, rscData, metadata);
     }
 
     return {

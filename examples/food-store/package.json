@@ -9,7 +9,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
     "qlara": "workspace:*",
-    "next": "^15.0.0",
+    "next": "16.1.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

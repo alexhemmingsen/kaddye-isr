@@ -114,3 +114,103 @@ describe('CloudFront Function URL rewrite alignment', () => {
     expect(cfFunctionRewrite('/image.png')).toBe('/image.png');
   });
 });
+
+// ── Segment file functions (inlined from renderer.ts) ─────────────
+
+type SegmentFileType = 'shared' | 'tree' | 'head' | 'full' | 'page';
+
+function classifySegmentFile(name: string): SegmentFileType {
+  if (name === '__next._tree.txt') return 'tree';
+  if (name === '__next._head.txt') return 'head';
+  if (name === '__next._full.txt') return 'full';
+  if (name.includes('__PAGE__')) return 'page';
+  return 'shared';
+}
+
+function patchTreeSegment(template: string, newValue: string): string {
+  return template.replace(
+    /"paramType":"d","paramKey":"[^"]*"/,
+    `"paramType":"d","paramKey":"${newValue}"`
+  );
+}
+
+function patchPageSegment(template: string, params: Record<string, string>): string {
+  let result = template;
+  for (const [key, value] of Object.entries(params)) {
+    result = result.replace(
+      new RegExp(`"${key}":"[^"]*"`),
+      `"${key}":"${value}"`
+    );
+  }
+  return result;
+}
+
+describe('classifySegmentFile', () => {
+  it('classifies _tree.txt', () => {
+    expect(classifySegmentFile('__next._tree.txt')).toBe('tree');
+  });
+
+  it('classifies _head.txt', () => {
+    expect(classifySegmentFile('__next._head.txt')).toBe('head');
+  });
+
+  it('classifies _full.txt', () => {
+    expect(classifySegmentFile('__next._full.txt')).toBe('full');
+  });
+
+  it('classifies __PAGE__ files', () => {
+    expect(classifySegmentFile('__next.product.$d$id.__PAGE__.txt')).toBe('page');
+  });
+
+  it('classifies layout segments as shared', () => {
+    expect(classifySegmentFile('__next._index.txt')).toBe('shared');
+    expect(classifySegmentFile('__next.product.txt')).toBe('shared');
+    expect(classifySegmentFile('__next.product.$d$id.txt')).toBe('shared');
+  });
+});
+
+describe('patchTreeSegment', () => {
+  const template = '0:{"buildId":"abc","tree":{"name":"","paramType":null,"paramKey":"","slots":{"children":{"name":"product","paramType":null,"paramKey":"product","slots":{"children":{"name":"id","paramType":"d","paramKey":"1","slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","slots":null}}}}}}}}';
+
+  it('replaces the dynamic paramKey value', () => {
+    const result = patchTreeSegment(template, '42');
+    expect(result).toContain('"paramType":"d","paramKey":"42"');
+    expect(result).not.toContain('"paramKey":"1"');
+  });
+
+  it('preserves other paramKey values', () => {
+    const result = patchTreeSegment(template, '42');
+    expect(result).toContain('"paramKey":"product"');
+    expect(result).toContain('"paramKey":"__PAGE__"');
+  });
+
+  it('handles slug-style values', () => {
+    const result = patchTreeSegment(template, 'my-awesome-product');
+    expect(result).toContain('"paramType":"d","paramKey":"my-awesome-product"');
+  });
+});
+
+describe('patchPageSegment', () => {
+  const template = `1:"$Sreact.fragment"
+2:I[71446,["/_next/static/chunks/abc.js"],"ProductDetail"]
+0:{"buildId":"abc","rsc":["$","$1","c",{"children":[["$","$L2",null,{"id":"1"}],["$","script","script-0",{"src":"test.js"}]]}],"loading":null,"isPartial":false}`;
+
+  it('replaces param value in page component props', () => {
+    const result = patchPageSegment(template, { id: '42' });
+    expect(result).toContain('{"id":"42"}');
+    expect(result).not.toContain('{"id":"1"}');
+  });
+
+  it('handles multiple params', () => {
+    const multiTemplate = '0:{"rsc":["$","$L2",null,{"year":"2024","slug":"my-post"}]}';
+    const result = patchPageSegment(multiTemplate, { year: '2025', slug: 'new-post' });
+    expect(result).toContain('"year":"2025"');
+    expect(result).toContain('"slug":"new-post"');
+  });
+
+  it('preserves non-param content', () => {
+    const result = patchPageSegment(template, { id: '42' });
+    expect(result).toContain('ProductDetail');
+    expect(result).toContain('"buildId":"abc"');
+  });
+});
