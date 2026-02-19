@@ -18,7 +18,7 @@
  * 4. Uploads the final SEO-complete HTML to S3 for future requests
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { QlaraRoute } from './types.js';
 
@@ -167,6 +167,56 @@ export function getFallbackKey(routePattern: string): string {
 }
 
 /**
+ * Find an existing HTML file to use as a fallback template for a route pattern.
+ *
+ * For single-param routes like '/product/:id':
+ *   Looks in out/product/ for *.html files (simple case).
+ *
+ * For multi-param routes like '/:lang/products/:id':
+ *   Walks the directory tree: out/ → pick any subdir (for :lang) → products/ → pick any .html
+ *   Static segments match exact directory names; dynamic segments try any subdirectory.
+ *
+ * @returns Absolute path to a template HTML file, or null if none found.
+ */
+export function findTemplateForRoute(buildDir: string, routePattern: string): string | null {
+  const segments = routePattern.replace(/^\//, '').split('/');
+
+  function walk(currentDir: string, segmentIndex: number): string | null {
+    if (segmentIndex >= segments.length) return null;
+    if (!existsSync(currentDir)) return null;
+
+    const segment = segments[segmentIndex];
+    const isLast = segmentIndex === segments.length - 1;
+    const isDynamic = segment.startsWith(':');
+
+    if (isLast) {
+      // Last segment — look for .html files in the current directory
+      const files = readdirSync(currentDir).filter(
+        f => f.endsWith('.html') && f !== FALLBACK_FILENAME
+      );
+      return files.length > 0 ? join(currentDir, files[0]) : null;
+    }
+
+    if (isDynamic) {
+      // Dynamic segment — try any subdirectory (skip _next, hidden dirs)
+      const entries = readdirSync(currentDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.')) {
+          const result = walk(join(currentDir, entry.name), segmentIndex + 1);
+          if (result) return result;
+        }
+      }
+      return null;
+    }
+
+    // Static segment — descend into exact subdirectory
+    return walk(join(currentDir, segment), segmentIndex + 1);
+  }
+
+  return walk(buildDir, 0);
+}
+
+/**
  * Generate fallback pages for all Qlara dynamic routes.
  * Called during `qlara deploy` before uploading to S3.
  *
@@ -181,38 +231,37 @@ export function generateFallbacks(
   const generated: string[] = [];
 
   for (const route of routes) {
-    // Convert route pattern to directory path: '/product/:id' → 'product'
-    const parts = route.pattern.replace(/^\//, '').split('/');
-    const dirParts = parts.filter(p => !p.startsWith(':'));
-    const routeDir = join(buildDir, ...dirParts);
+    // Find a template HTML file by walking the directory tree following the route pattern
+    const templatePath = findTemplateForRoute(buildDir, route.pattern);
 
-    if (!existsSync(routeDir)) {
+    if (!templatePath) {
       console.warn(
-        `[qlara] Warning: No output directory for route ${route.pattern} at ${routeDir}`
+        `[qlara] Warning: No HTML template found for route ${route.pattern}`
       );
       continue;
     }
 
-    // Find an existing .html file to use as template (skip _fallback.html itself)
-    const files = readdirSync(routeDir).filter(
-      f => f.endsWith('.html') && f !== FALLBACK_FILENAME
-    );
-
-    if (files.length === 0) {
-      console.warn(
-        `[qlara] Warning: No HTML files in ${routeDir} to create fallback template`
-      );
-      continue;
-    }
-
-    const templatePath = join(routeDir, files[0]);
     const templateHtml = readFileSync(templatePath, 'utf-8');
     const fallbackHtml = generateFallbackFromTemplate(templateHtml, route.pattern);
 
-    const fallbackPath = join(routeDir, FALLBACK_FILENAME);
+    // Derive the fallback output path from the static segments of the pattern
+    // e.g., '/:lang/products/:id' → 'products/_fallback.html'
+    const parts = route.pattern.replace(/^\//, '').split('/');
+    const dirParts = parts.filter(p => !p.startsWith(':'));
+    const fallbackDir = dirParts.length > 0 ? join(buildDir, ...dirParts) : buildDir;
+
+    // Ensure the output directory exists (may not for multi-param routes where
+    // the static-only path doesn't correspond to a real build output directory)
+    if (!existsSync(fallbackDir)) {
+      mkdirSync(fallbackDir, { recursive: true });
+    }
+
+    const fallbackPath = join(fallbackDir, FALLBACK_FILENAME);
     writeFileSync(fallbackPath, fallbackHtml);
 
-    const relativePath = join(...dirParts, FALLBACK_FILENAME);
+    const relativePath = dirParts.length > 0
+      ? join(...dirParts, FALLBACK_FILENAME)
+      : FALLBACK_FILENAME;
     generated.push(relativePath);
     console.log(`[qlara] Generated fallback: ${relativePath}`);
   }

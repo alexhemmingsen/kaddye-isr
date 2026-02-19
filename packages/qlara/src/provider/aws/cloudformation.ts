@@ -310,7 +310,24 @@ export function buildTemplate(config: CloudFormationConfig): Record<string, unkn
                 },
               ],
             },
-            // No CustomErrorResponses — the edge handler manages 403/404
+            // Serve the framework's 404 page (e.g., Next.js not-found.ts → 404.html)
+            // when S3 returns 403 (missing file) or 404. This covers:
+            // - Unknown routes not in the manifest
+            // - Validation failures (renderer abandons, no file uploaded)
+            CustomErrorResponses: [
+              {
+                ErrorCode: 403,
+                ResponseCode: 404,
+                ResponsePagePath: '/404.html',
+                ErrorCachingMinTTL: 10,
+              },
+              {
+                ErrorCode: 404,
+                ResponseCode: 404,
+                ResponsePagePath: '/404.html',
+                ErrorCachingMinTTL: 10,
+              },
+            ],
           },
         },
       },

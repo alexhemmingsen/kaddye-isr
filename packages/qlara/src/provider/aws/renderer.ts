@@ -834,6 +834,58 @@ async function findReferenceSegmentDir(bucket: string, routePrefix: string): Pro
   return null;
 }
 
+/**
+ * Find a reference segment directory using the route pattern.
+ * For multi-param routes like /:lang/products/:id, the direct URI-based prefix
+ * (e.g., 'da/products') may not contain any build-time pages. This function
+ * walks the S3 key hierarchy following the route pattern: static segments
+ * descend directly, dynamic segments list subdirectories and try any of them.
+ */
+async function findReferenceSegmentDirByPattern(
+  bucket: string,
+  routePattern: string,
+): Promise<string | null> {
+  // Remove the last segment (the page-level param) to get the parent segments
+  const segments = routePattern.replace(/^\//, '').split('/');
+  const parentSegments = segments.slice(0, -1);
+
+  async function searchPrefix(prefix: string, segmentIndex: number): Promise<string | null> {
+    if (segmentIndex >= parentSegments.length) {
+      // We've traversed all parent segments — check for segment files here
+      return findReferenceSegmentDir(bucket, prefix.replace(/\/$/, ''));
+    }
+
+    const segment = parentSegments[segmentIndex];
+
+    if (!segment.startsWith(':')) {
+      // Static segment — descend directly
+      const nextPrefix = prefix ? `${prefix}${segment}/` : `${segment}/`;
+      return searchPrefix(nextPrefix, segmentIndex + 1);
+    }
+
+    // Dynamic segment — list subdirectories and try each
+    try {
+      const response = await s3.send(new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        Delimiter: '/',
+        MaxKeys: 10,
+      }));
+
+      for (const commonPrefix of response.CommonPrefixes || []) {
+        const subPrefix = commonPrefix.Prefix || '';
+        const result = await searchPrefix(subPrefix, segmentIndex + 1);
+        if (result) return result;
+      }
+    } catch {
+      // S3 error — skip
+    }
+    return null;
+  }
+
+  return searchPrefix('', 0);
+}
+
 type SegmentFileType = 'shared' | 'tree' | 'head' | 'full' | 'page';
 
 /**
@@ -1004,14 +1056,19 @@ async function generateSegmentFiles(
   params: Record<string, string>,
   rscData: string | null,
   metadata: QlaraMetadata | null,
+  routePattern: string,
 ): Promise<void> {
   const cleanUri = uri.replace(/^\//, '').replace(/\/$/, '');
   const parts = cleanUri.split('/');
-  const routePrefix = parts.slice(0, -1).join('/'); // 'product'
-  const segmentDir = `${cleanUri}/`;                 // 'product/42/'
+  const routePrefix = parts.slice(0, -1).join('/'); // 'da/products'
+  const segmentDir = `${cleanUri}/`;                 // 'da/products/42/'
 
-  // Find a build-time page with segment files to use as reference
-  const refDir = await findReferenceSegmentDir(bucket, routePrefix);
+  // Find a build-time page with segment files to use as reference.
+  // Try the direct URI prefix first; fall back to pattern-based search for multi-param routes.
+  let refDir = await findReferenceSegmentDir(bucket, routePrefix);
+  if (!refDir) {
+    refDir = await findReferenceSegmentDirByPattern(bucket, routePattern);
+  }
   if (!refDir) return; // No segment files on S3 — Next.js 15 or no build-time pages
 
   // List all segment files in the reference directory
@@ -1217,7 +1274,7 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
       // 7. Generate per-segment prefetch files (Next.js 16+ Segment Cache)
       //    Reads templates from a build-time reference page, patches page-specific data.
       //    Skips automatically for Next.js 15 (no segment files on S3).
-      await generateSegmentFiles(bucket, uri, params, rscData, metadata);
+      await generateSegmentFiles(bucket, uri, params, rscData, metadata, routePattern);
     }
 
     return {

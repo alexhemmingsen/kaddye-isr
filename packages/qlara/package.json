@@ -1,6 +1,6 @@
 {
   "name": "qlara",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Runtime ISR for static React apps — dynamic routing and SEO metadata for statically exported Next.js apps on AWS",
   "license": "MIT",
   "keywords": [

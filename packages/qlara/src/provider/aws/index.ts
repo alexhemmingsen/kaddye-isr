@@ -218,6 +218,20 @@ async function updateCloudFrontEdgeVersion(
     config.DefaultCacheBehavior!.CachePolicyId = qlaraPolicyId;
   }
 
+  // Ensure custom error responses are configured (serve 404.html for S3 403/404)
+  const hasErrorResponses = config.CustomErrorResponses?.Items?.some(
+    (r: { ErrorCode?: number }) => r.ErrorCode === 403
+  );
+  if (!hasErrorResponses) {
+    config.CustomErrorResponses = {
+      Quantity: 2,
+      Items: [
+        { ErrorCode: 403, ResponseCode: '404', ResponsePagePath: '/404.html', ErrorCachingMinTTL: 10 },
+        { ErrorCode: 404, ResponseCode: '404', ResponsePagePath: '/404.html', ErrorCachingMinTTL: 10 },
+      ],
+    };
+  }
+
   // Update the distribution
   await cf.send(
     new UpdateDistributionCommand({
