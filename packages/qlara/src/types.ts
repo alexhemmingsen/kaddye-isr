@@ -456,33 +456,63 @@ export interface QlaraMetadata {
 }
 
 /**
- * Function that fetches data for a dynamic route and returns metadata.
+ * Function that generates metadata for a dynamic route.
  * Equivalent to Next.js `generateMetadata()` — runs in the renderer Lambda
  * with access to the data source.
  *
- * @param params - The route parameters, e.g. { id: '42' } for /product/:id
+ * @param params - All route parameters, e.g. { lang: 'en', id: '42' } for /:lang/products/:id
  * @returns Metadata for the page, or null if the page doesn't exist
  */
 export type QlaraMetaDataGenerator = (params: Record<string, string>) => Promise<QlaraMetadata | null>;
 
-/** A single route definition with its pattern and metadata generator. */
+/**
+ * Optional validation function for a dynamic route.
+ * Called before reading the fallback or generating metadata.
+ * Use this to cheaply reject invalid param combinations (e.g., unsupported languages).
+ *
+ * Receives ALL route parameters — you can validate every dynamic segment.
+ *
+ * @param params - All route parameters, e.g. { lang: 'en', id: '42' }
+ * @returns true if the params are valid, false to return 404 immediately
+ */
+export type QlaraValidate = (params: Record<string, string>) => Promise<boolean>;
+
+/**
+ * A single route definition at the leaf page level.
+ *
+ * Follows the Next.js "generate from bottom up" pattern:
+ * define one route entry per leaf page with ALL dynamic params.
+ */
 export interface QlaraRouteDefinition {
-  /** Dynamic route pattern, e.g. '/product/:id' */
+  /** Dynamic route pattern, e.g. '/:lang/products/:id' */
   route: string;
-  /** Function that fetches metadata for this route from the data source */
-  metaDataGenerator: QlaraMetaDataGenerator;
+  /**
+   * Optional validation function — called before rendering.
+   * Return `false` to 404 immediately without generating the page.
+   * Receives all params so you can validate every dynamic segment.
+   */
+  validate?: QlaraValidate;
+  /**
+   * Function that generates metadata for this route.
+   * Preferred name — use this instead of `metaDataGenerator`.
+   */
+  generateMetadata?: QlaraMetaDataGenerator;
+  /**
+   * @deprecated Use `generateMetadata` instead. Kept for backward compatibility.
+   */
+  metaDataGenerator?: QlaraMetaDataGenerator;
 }
 
 /**
  * The route file default export type: an array of route definitions.
  *
- * Example:
+ * Example (single param):
  * ```typescript
  * import type { QlaraRoutes } from 'qlara';
  * const routes: QlaraRoutes = [
  *   {
  *     route: '/product/:id',
- *     metaDataGenerator: async (params) => {
+ *     generateMetadata: async (params) => {
  *       const product = await getProduct(params.id);
  *       if (!product) return null;
  *       return { title: product.name, description: product.description };
@@ -490,6 +520,25 @@ export interface QlaraRouteDefinition {
  *   },
  * ];
  * export default routes;
+ * ```
+ *
+ * Example (multiple params with validation):
+ * ```typescript
+ * const routes: QlaraRoutes = [
+ *   {
+ *     route: '/:lang/products/:id',
+ *     validate: async (params) => {
+ *       if (!['en', 'da', 'de'].includes(params.lang)) return false;
+ *       const product = await getProduct(params.id);
+ *       return !!product;
+ *     },
+ *     generateMetadata: async (params) => {
+ *       const product = await getProduct(params.id);
+ *       if (!product) return null;
+ *       return { title: `${product.name} | Store` };
+ *     },
+ *   },
+ * ];
  * ```
  */
 export type QlaraRoutes = QlaraRouteDefinition[];

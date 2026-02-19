@@ -7,15 +7,15 @@
  *
  * The fallback page:
  * - Shares the same JS chunks as real pages (so React hydration works)
- * - Has the `__QLARA_FALLBACK__` placeholder where the route param would be
+ * - Has per-param placeholders (`__QLARA_FALLBACK_id__`, `__QLARA_FALLBACK_lang__`) where dynamic values would be
  * - Has generic "Loading..." metadata
  * - Triggers client-side data fetching instead of showing stale server data
  *
- * At runtime, Qlara's edge handler:
+ * At runtime, Qlara's renderer:
  * 1. Reads the fallback from S3
- * 2. Replaces `__QLARA_FALLBACK__` with the actual param value from the URL
- * 3. Serves it to the user (who sees a loading state, then real content)
- * 4. Fires off the renderer to generate and cache the real page with SEO metadata
+ * 2. Replaces each per-param placeholder with the actual param value from the URL
+ * 3. Patches metadata from the developer's generateMetadata function
+ * 4. Uploads the final SEO-complete HTML to S3 for future requests
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
@@ -23,13 +23,30 @@ import { join } from 'node:path';
 import type { QlaraRoute } from './types.js';
 
 export const FALLBACK_FILENAME = '_fallback.html';
+
+/**
+ * @deprecated Use `paramPlaceholder(name)` for per-param placeholders.
+ * Kept for reference only — no longer used in generation/rendering logic.
+ */
 export const FALLBACK_PLACEHOLDER = '__QLARA_FALLBACK__';
+
+/**
+ * Generate a per-param placeholder string.
+ * Each dynamic param gets a unique placeholder so the renderer can
+ * replace them independently at runtime.
+ *
+ * paramPlaceholder('id')   → '__QLARA_FALLBACK_id__'
+ * paramPlaceholder('lang') → '__QLARA_FALLBACK_lang__'
+ */
+export function paramPlaceholder(paramName: string): string {
+  return `__QLARA_FALLBACK_${paramName}__`;
+}
 
 /**
  * Generate a fallback HTML page from an existing statically generated page.
  *
- * Strips product-specific content and metadata, replacing with loading state.
- * Inserts `__QLARA_FALLBACK__` placeholder where route params appear in RSC flight data.
+ * Strips page-specific content and metadata, replacing with loading state.
+ * Inserts per-param placeholders (e.g. `__QLARA_FALLBACK_id__`) where route params appear in RSC flight data.
  */
 export function generateFallbackFromTemplate(
   templateHtml: string,
@@ -70,7 +87,8 @@ export function generateFallbackFromTemplate(
   // Helper: escaped double quote in RSC flight data
   const q = '\\\\"'; // matches literal \" in the HTML string
 
-  // Patch the component props: {\"id\":\"X\"} → {\"id\":\"__QLARA_FALLBACK__\"}
+  // Patch the component props: {\"id\":\"X\"} → {\"id\":\"__QLARA_FALLBACK_id__\"}
+  // Each param gets a unique per-param placeholder so the renderer can replace them independently.
   for (const param of paramNames) {
     // Match {\"id\":\"VALUE\"} with optional ,\"initial\":... suffix
     const propsRegex = new RegExp(
@@ -79,11 +97,11 @@ export function generateFallbackFromTemplate(
     );
     fallback = fallback.replace(
       propsRegex,
-      `{\\"${param}\\":\\"${FALLBACK_PLACEHOLDER}\\"}`
+      `{\\"${param}\\":\\"${paramPlaceholder(param)}\\"}`
     );
   }
 
-  // Patch route segment: [\"id\",\"X\",\"d\"] → [\"id\",\"__QLARA_FALLBACK__\",\"d\"]
+  // Patch route segment: [\"id\",\"X\",\"d\"] → [\"id\",\"__QLARA_FALLBACK_id__\",\"d\"]
   for (const param of paramNames) {
     const segmentRegex = new RegExp(
       `\\[${q}${param}${q},${q}[^"]+${q},${q}d${q}\\]`,
@@ -91,23 +109,39 @@ export function generateFallbackFromTemplate(
     );
     fallback = fallback.replace(
       segmentRegex,
-      `[\\"${param}\\",\\"${FALLBACK_PLACEHOLDER}\\",\\"d\\"]`
+      `[\\"${param}\\",\\"${paramPlaceholder(param)}\\",\\"d\\"]`
     );
   }
 
   // Patch URL segments in flight data:
-  // \"c\":[\"\",\"product\",\"X\"] → \"c\":[\"\",\"product\",\"__QLARA_FALLBACK__\"]
-  const routeParts = routePattern.split('/').filter(p => !p.startsWith(':'));
-  if (routeParts.length > 0) {
-    const prefix = routeParts.map(p => `${q}${p}${q}`).join(',');
-    const urlSegmentRegex = new RegExp(
-      `(${q}c${q}:\\[${prefix},)${q}[^"]*${q}\\]`,
+  // For /:lang/products/:id with values en,products,99:
+  // \"c\":[\"\",\"en\",\"products\",\"99\"] → \"c\":[\"\",\"__QLARA_FALLBACK_lang__\",\"products\",\"__QLARA_FALLBACK_id__\"]
+  // Handles interleaved static and dynamic segments.
+  const allSegments = routePattern.split('/'); // ['', ':lang', 'products', ':id']
+  if (allSegments.length > 1) {
+    // Build regex: match the c-array with known static parts and wildcard for dynamic parts
+    const regexParts = allSegments.map(seg => {
+      if (seg.startsWith(':')) {
+        return `${q}[^"]*${q}`; // match any value for dynamic segment
+      }
+      return `${q}${seg}${q}`; // match literal static segment
+    });
+    const cArrayRegex = new RegExp(
+      `(${q}c${q}:\\[)${regexParts.join(',')}(\\])`,
       'g'
     );
-    fallback = fallback.replace(
-      urlSegmentRegex,
-      `$1\\"${FALLBACK_PLACEHOLDER}\\"]`
-    );
+
+    // Build replacement: static parts stay, dynamic parts get per-param placeholders
+    const replacementParts = allSegments.map(seg => {
+      if (seg.startsWith(':')) {
+        const pName = seg.slice(1);
+        return `\\"${paramPlaceholder(pName)}\\"`;
+      }
+      return `\\"${seg}\\"`;
+    });
+    const replacement = `$1${replacementParts.join(',')}$2`;
+
+    fallback = fallback.replace(cArrayRegex, replacement);
   }
 
   // 5. Replace metadata flight data with generic loading metadata

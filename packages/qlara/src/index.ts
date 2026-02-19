@@ -14,6 +14,7 @@ export type {
   // Metadata types
   QlaraMetadata,
   QlaraMetaDataGenerator,
+  QlaraValidate,
   QlaraAuthor,
   QlaraReferrer,
   QlaraRobotsInfo,

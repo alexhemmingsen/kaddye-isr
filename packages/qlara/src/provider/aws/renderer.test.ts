@@ -115,6 +115,79 @@ describe('CloudFront Function URL rewrite alignment', () => {
   });
 });
 
+// ── Fallback key derivation (inlined from renderer.ts) ────────────
+
+function deriveFallbackKey(routePattern: string): string {
+  const parts = routePattern.replace(/^\//, '').split('/');
+  const dirParts = parts.filter(p => !p.startsWith(':'));
+  return [...dirParts, '_fallback.html'].join('/');
+}
+
+describe('deriveFallbackKey', () => {
+  it('single-param: /product/:id → product/_fallback.html', () => {
+    expect(deriveFallbackKey('/product/:id')).toBe('product/_fallback.html');
+  });
+
+  it('multi-param: /:lang/products/:id → products/_fallback.html', () => {
+    expect(deriveFallbackKey('/:lang/products/:id')).toBe('products/_fallback.html');
+  });
+
+  it('multi-param: /blog/:year/:slug → blog/_fallback.html', () => {
+    expect(deriveFallbackKey('/blog/:year/:slug')).toBe('blog/_fallback.html');
+  });
+
+  it('all dynamic: /:a/:b/:c → _fallback.html', () => {
+    expect(deriveFallbackKey('/:a/:b/:c')).toBe('_fallback.html');
+  });
+
+  it('mixed: /:lang/shop/:category/items/:id → shop/items/_fallback.html', () => {
+    expect(deriveFallbackKey('/:lang/shop/:category/items/:id')).toBe('shop/items/_fallback.html');
+  });
+});
+
+// ── Per-param placeholder (inlined from renderer.ts) ──────────────
+
+function paramPlaceholder(paramName: string): string {
+  return `__QLARA_FALLBACK_${paramName}__`;
+}
+
+describe('paramPlaceholder', () => {
+  it('generates per-param placeholder', () => {
+    expect(paramPlaceholder('id')).toBe('__QLARA_FALLBACK_id__');
+    expect(paramPlaceholder('lang')).toBe('__QLARA_FALLBACK_lang__');
+  });
+});
+
+describe('per-param placeholder replacement', () => {
+  it('replaces single-param placeholder', () => {
+    const html = 'value=__QLARA_FALLBACK_id__ other=__QLARA_FALLBACK_id__';
+    let result = html;
+    for (const [name, value] of Object.entries({ id: '42' })) {
+      result = result.replace(new RegExp(paramPlaceholder(name), 'g'), value);
+    }
+    expect(result).toBe('value=42 other=42');
+  });
+
+  it('replaces multi-param placeholders independently', () => {
+    const html = 'lang=__QLARA_FALLBACK_lang__ id=__QLARA_FALLBACK_id__';
+    let result = html;
+    for (const [name, value] of Object.entries({ lang: 'en', id: '99' })) {
+      result = result.replace(new RegExp(paramPlaceholder(name), 'g'), value);
+    }
+    expect(result).toBe('lang=en id=99');
+  });
+
+  it('does not cross-replace different param placeholders', () => {
+    const html = '__QLARA_FALLBACK_lang__ stays __QLARA_FALLBACK_id__';
+    // Only replace lang, not id
+    let result = html;
+    for (const [name, value] of Object.entries({ lang: 'da' })) {
+      result = result.replace(new RegExp(paramPlaceholder(name), 'g'), value);
+    }
+    expect(result).toBe('da stays __QLARA_FALLBACK_id__');
+  });
+});
+
 // ── Segment file functions (inlined from renderer.ts) ─────────────
 
 type SegmentFileType = 'shared' | 'tree' | 'head' | 'full' | 'page';
@@ -127,11 +200,15 @@ function classifySegmentFile(name: string): SegmentFileType {
   return 'shared';
 }
 
-function patchTreeSegment(template: string, newValue: string): string {
-  return template.replace(
-    /"paramType":"d","paramKey":"[^"]*"/,
-    `"paramType":"d","paramKey":"${newValue}"`
-  );
+function patchTreeSegment(template: string, params: Record<string, string>): string {
+  let result = template;
+  for (const [name, value] of Object.entries(params)) {
+    result = result.replace(
+      new RegExp(`"name":"${name}","paramType":"d","paramKey":"[^"]*"`),
+      `"name":"${name}","paramType":"d","paramKey":"${value}"`
+    );
+  }
+  return result;
 }
 
 function patchPageSegment(template: string, params: Record<string, string>): string {
@@ -170,23 +247,41 @@ describe('classifySegmentFile', () => {
 });
 
 describe('patchTreeSegment', () => {
-  const template = '0:{"buildId":"abc","tree":{"name":"","paramType":null,"paramKey":"","slots":{"children":{"name":"product","paramType":null,"paramKey":"product","slots":{"children":{"name":"id","paramType":"d","paramKey":"1","slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","slots":null}}}}}}}}';
+  // Single-param tree
+  const singleTemplate = '0:{"buildId":"abc","tree":{"name":"","paramType":null,"paramKey":"","slots":{"children":{"name":"product","paramType":null,"paramKey":"product","slots":{"children":{"name":"id","paramType":"d","paramKey":"1","slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","slots":null}}}}}}}}';
 
-  it('replaces the dynamic paramKey value', () => {
-    const result = patchTreeSegment(template, '42');
-    expect(result).toContain('"paramType":"d","paramKey":"42"');
+  it('replaces the dynamic paramKey value (single param)', () => {
+    const result = patchTreeSegment(singleTemplate, { id: '42' });
+    expect(result).toContain('"name":"id","paramType":"d","paramKey":"42"');
     expect(result).not.toContain('"paramKey":"1"');
   });
 
-  it('preserves other paramKey values', () => {
-    const result = patchTreeSegment(template, '42');
+  it('preserves other paramKey values (single param)', () => {
+    const result = patchTreeSegment(singleTemplate, { id: '42' });
     expect(result).toContain('"paramKey":"product"');
     expect(result).toContain('"paramKey":"__PAGE__"');
   });
 
   it('handles slug-style values', () => {
-    const result = patchTreeSegment(template, 'my-awesome-product');
-    expect(result).toContain('"paramType":"d","paramKey":"my-awesome-product"');
+    const result = patchTreeSegment(singleTemplate, { id: 'my-awesome-product' });
+    expect(result).toContain('"name":"id","paramType":"d","paramKey":"my-awesome-product"');
+  });
+
+  // Multi-param tree
+  const multiTemplate = '0:{"buildId":"abc","tree":{"name":"","paramType":null,"paramKey":"","slots":{"children":{"name":"lang","paramType":"d","paramKey":"en","slots":{"children":{"name":"products","paramType":null,"paramKey":"products","slots":{"children":{"name":"id","paramType":"d","paramKey":"1","slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","slots":null}}}}}}}}}}';
+
+  it('patches both dynamic params (multi-param)', () => {
+    const result = patchTreeSegment(multiTemplate, { lang: 'fr', id: '42' });
+    expect(result).toContain('"name":"lang","paramType":"d","paramKey":"fr"');
+    expect(result).toContain('"name":"id","paramType":"d","paramKey":"42"');
+  });
+
+  it('preserves static segments in multi-param tree', () => {
+    const result = patchTreeSegment(multiTemplate, { lang: 'da', id: '99' });
+    expect(result).toContain('"paramKey":"products"');
+    expect(result).toContain('"paramKey":"__PAGE__"');
+    expect(result).not.toContain('"paramKey":"en"');
+    expect(result).not.toContain('"paramKey":"1"');
   });
 });
 

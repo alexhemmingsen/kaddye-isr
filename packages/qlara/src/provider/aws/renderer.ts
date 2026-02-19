@@ -78,8 +78,6 @@ interface RendererResult {
   html?: string;
 }
 
-const FALLBACK_PLACEHOLDER = '__QLARA_FALLBACK__';
-
 // Module-scope S3 client — reused across warm invocations (avoids recreating TCP/TLS connections)
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 
@@ -95,23 +93,27 @@ function deriveS3Key(uri: string): string {
 }
 
 /**
- * Derive the fallback S3 key from a URI.
- * /product/42 → product/_fallback.html
+ * Derive the fallback S3 key from a route pattern.
+ * Filters out dynamic segments (starting with ':') and appends _fallback.html.
+ * Must match getFallbackKey() in fallback.ts.
+ *
+ * '/product/:id' → 'product/_fallback.html'
+ * '/:lang/products/:id' → 'products/_fallback.html'
+ * '/:a/:b/:c' → '_fallback.html'
  */
-function deriveFallbackKey(uri: string): string {
-  const cleanUri = uri.replace(/^\//, '').replace(/\/$/, '');
-  const parts = cleanUri.split('/');
-  if (parts.length < 2) return '_fallback.html';
-  return parts.slice(0, -1).join('/') + '/_fallback.html';
+function deriveFallbackKey(routePattern: string): string {
+  const parts = routePattern.replace(/^\//, '').split('/');
+  const dirParts = parts.filter(p => !p.startsWith(':'));
+  return [...dirParts, '_fallback.html'].join('/');
 }
 
 /**
- * Extract the last path segment (the dynamic param value) from a URI.
- * /product/42 → '42'
+ * Generate a per-param placeholder string.
+ * Must match paramPlaceholder() in fallback.ts (inlined because renderer
+ * is bundled as a standalone Lambda ZIP).
  */
-function extractParamValue(uri: string): string {
-  const cleanUri = uri.replace(/^\//, '').replace(/\/$/, '');
-  return cleanUri.split('/').pop() || '';
+function paramPlaceholder(paramName: string): string {
+  return `__QLARA_FALLBACK_${paramName}__`;
 }
 
 // ── Helpers: normalize single-or-array values ────────────────────
@@ -866,13 +868,19 @@ async function listReferenceSegmentFiles(bucket: string, refDir: string): Promis
 }
 
 /**
- * Patch the _tree.txt segment: replace the dynamic paramKey value.
+ * Patch the _tree.txt segment: replace dynamic paramKey values for all params.
+ * Each dynamic segment has "name":"<paramName>","paramType":"d","paramKey":"<value>".
+ * We match on the param name to replace the correct paramKey for each param.
  */
-function patchTreeSegment(template: string, newValue: string): string {
-  return template.replace(
-    /"paramType":"d","paramKey":"[^"]*"/,
-    `"paramType":"d","paramKey":"${newValue}"`
-  );
+function patchTreeSegment(template: string, params: Record<string, string>): string {
+  let result = template;
+  for (const [name, value] of Object.entries(params)) {
+    result = result.replace(
+      new RegExp(`"name":"${name}","paramType":"d","paramKey":"[^"]*"`),
+      `"name":"${name}","paramType":"d","paramKey":"${value}"`
+    );
+  }
+  return result;
 }
 
 /**
@@ -1033,7 +1041,6 @@ async function generateSegmentFiles(
   }
 
   // Generate each segment file
-  const paramValue = parts[parts.length - 1]; // last path segment = dynamic param value
   const uploads: Promise<unknown>[] = [];
   const cacheControl = `public, max-age=0, s-maxage=${__QLARA_CACHE_TTL__}, stale-while-revalidate=60`;
 
@@ -1048,7 +1055,7 @@ async function generateSegmentFiles(
       case 'tree': {
         const template = refMap.get(name);
         if (template) {
-          content = patchTreeSegment(template, paramValue);
+          content = patchTreeSegment(template, params);
         }
         break;
       }
@@ -1108,9 +1115,22 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
   const { uri, bucket, routePattern, params } = event;
 
   try {
-    // 0. Check if already rendered + read fallback in parallel
+    // 0. Find route definition and run validation (if defined)
+    const routeDef = routes?.find((r: { route: string }) => r.route === routePattern);
+
+    if (routeDef?.validate) {
+      const isValid = await routeDef.validate(params);
+      if (!isValid) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({ error: `Validation failed for ${uri}`, params }),
+        };
+      }
+    }
+
+    // 1. Check if already rendered + read fallback in parallel
     const s3Key = deriveS3Key(uri);
-    const fallbackKey = deriveFallbackKey(uri);
+    const fallbackKey = deriveFallbackKey(routePattern);
 
     const [existingResult, fallbackResult] = await Promise.allSettled([
       s3.send(new GetObjectCommand({ Bucket: bucket, Key: s3Key })),
@@ -1147,19 +1167,18 @@ export async function handler(event: RendererEvent & { warmup?: boolean }): Prom
       };
     }
 
-    // 2. Patch the fallback with the actual param value
-    const paramValue = extractParamValue(uri);
-    let html = fallbackHtml.replace(
-      new RegExp(FALLBACK_PLACEHOLDER, 'g'),
-      paramValue
-    );
+    // 2. Patch the fallback with actual param values (per-param placeholders)
+    let html = fallbackHtml;
+    for (const [name, value] of Object.entries(params)) {
+      html = html.replace(new RegExp(paramPlaceholder(name), 'g'), value);
+    }
 
-    // 3. Call the metaDataGenerator to fetch metadata from the data source
-    const routeDef = routes?.find((r: { route: string }) => r.route === routePattern);
+    // 3. Call generateMetadata (or deprecated metaDataGenerator) to fetch metadata
+    const metadataFn = routeDef?.generateMetadata || routeDef?.metaDataGenerator;
     let metadata: QlaraMetadata | null = null;
 
-    if (routeDef?.metaDataGenerator) {
-      metadata = await routeDef.metaDataGenerator(params);
+    if (metadataFn) {
+      metadata = await metadataFn(params);
       if (metadata) {
         // 4. Patch the HTML with real metadata
         html = patchMetadata(html, metadata);
